@@ -1,0 +1,9 @@
+[profile.default]
+src = "contracts"
+out = "out"
+libs = ["lib"]
+
+[profile.default.remappings]
+"v4-core/" = "lib/v4-core/contracts/"
+"v4-periphery/" = "lib/v4-periphery/contracts/"
+"aave/" = "lib/aave-protocol-v2/contracts/"
