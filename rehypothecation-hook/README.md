@@ -21,7 +21,8 @@ Lending interest (when out-of-range)
 
 📊 Extendable architecture: easy to plug in other lending protocols (Compound, Morpho, etc.)
 
-📂 Project Structure
+
+```📂 Project Structure
 rehypothecation-hook/
 ├── foundry.toml
 ├── lib/                     # dependencies (Uniswap v4, Aave)
@@ -36,6 +37,7 @@ rehypothecation-hook/
 ├── test/
 │   ├── RehypothecationHook.t.sol     # unit tests
 │   └── Integration.t.sol             # integration scenario tests
+```
 
 ⚙️ Setup
 1. Install Foundry
