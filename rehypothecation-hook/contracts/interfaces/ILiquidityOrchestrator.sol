@@ -73,6 +73,12 @@ interface ILiquidityOrchestrator {
         external
         returns (bool shouldRetry, bool allowPartialSwap, uint256 maxWaitTime);
 
+    /**
+     * @notice  Validate the accounting balance for a given position by comparing on-chain reserves with expected values.
+     * @param   positionKey  The key of the position to validate.
+     * @return  valid  Whether the accounting is valid.
+     * @return  discrepancy  The amount of discrepancy found.
+     */
     function validateAccountingBalance(bytes32 positionKey) external view returns (bool valid, uint256 discrepancy);
 
     /**
