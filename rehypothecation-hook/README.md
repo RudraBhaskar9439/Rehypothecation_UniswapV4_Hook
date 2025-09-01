@@ -41,27 +41,30 @@ rehypothecation-hook/
 
 ⚙️ Setup
 1. Install Foundry
+```
 curl -L https://foundry.paradigm.xyz | bash
 foundryup
+```
 
-2. Clone Repo
-git clone https://github.com/your-username/rehypothecation-hook.git
-cd rehypothecation-hook
 
-3. Install Dependencies
-forge install uniswap/v4-core --no-commit
-forge install uniswap/v4-periphery --no-commit
-forge install aave/protocol-v2 --no-commit
+2. Install Dependencies
+```
+forge install uniswap/v4-core 
+forge install uniswap/v4-periphery 
+forge install aave/protocol-v2 
+```
 
-4. Build
+3. Build
+```
 forge build
+```
 
 🧪 Testing
 
 Run all tests:
-
+```
 forge test -vvvv
-
+```
 
 Start a local chain:
 
@@ -69,9 +72,9 @@ anvil
 
 
 Deploy locally:
-
+```
 forge script script/DeployRehypothecationHook.s.sol --rpc-url http://127.0.0.1:8545 --broadcast
-
+```
 🚀 Demo Flow
 
 LP provides liquidity in Uniswap pool
