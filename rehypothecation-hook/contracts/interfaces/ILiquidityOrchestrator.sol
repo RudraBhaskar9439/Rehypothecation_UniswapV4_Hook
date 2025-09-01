@@ -39,6 +39,15 @@ interface ILiquidityOrchestrator {
      */
     function shouldRebalancePosition(bytes32 positionKey, int24 currentTick) external view returns (bool);
 
+    
+    /**
+     * @notice  Gas optimized function to update multiple positions.
+     * @param   positionKeys  The keys of the positions to check.
+     * @param   currentTick  The current tick of the positions.
+     * @return  bool[]  An array indicating whether each position should be rebalanced.
+     */
+    function shouldRebalancePositions(bytes32[] calldata positionKeys, int24 currentTick) external view returns (bool[] memory);
+
     /**
      * @notice  Calculates the optimal split of withdrawn assets between Aave and reserve for a given position.
      * @param   positionKey  The key of the position to check.
@@ -51,9 +60,18 @@ interface ILiquidityOrchestrator {
         view
         returns (RebalancePlan memory plan);
 
+    /**
+     * @notice  Handle a rebalance failure.
+     * @param   positionKey  The key of the position to check.
+     * @param   expectedAmount0  The expected amount of token0.
+     * @param   expectedAmount1  The expected amount of token1.
+     * @return  shouldRetry  Whether the rebalance should be retried.
+     * @return  allowPartialSwap  Whether partial swaps are allowed.
+     * @return  maxWaitTime  The maximum wait time before retrying.
+     */
     function handleRebalanceFail(bytes32 positionKey, uint256 expectedAmount0, uint256 expectedAmount1)
         external
-        returns (bool handled);
+        returns (bool shouldRetry, bool allowPartialSwap, uint256 maxWaitTime);
 
     function validateAccountingBalance(bytes32 positionKey) external view returns (bool valid, uint256 discrepancy);
 

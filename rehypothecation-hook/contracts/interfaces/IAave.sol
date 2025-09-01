@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 
-pragma soidity ^0.8.14;
+pragma solidity ^0.8.26;
 
 interface IAave {
     /**
