@@ -17,6 +17,8 @@ interface ILiquidityOrchestrator {
         uint256 totalLiquidity;
         uint256 reserveAmount0;
         uint256 reserveAmount1;
+        uint256 aaveAmount0;
+        uint256 aaveAmount1;
         uint8 reservePct; 
         PositionState state;
         bool exists;

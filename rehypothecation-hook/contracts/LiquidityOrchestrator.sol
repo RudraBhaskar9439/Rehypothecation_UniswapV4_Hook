@@ -5,7 +5,8 @@ pragma solidity ^0.8.26;
 import {Constant} from "./utils/Constants.sol";
 import {ILiquidityOrchestrator} from "./interfaces/ILiquidityOrchestrator.sol";
 
-contract LiquidityOrchestrator is ILiquidityOrchestrator {
+
+abstract contract LiquidityOrchestrator is ILiquidityOrchestrator {
     error PositionNotFound();
     error NotOwner();
 
@@ -102,12 +103,52 @@ contract LiquidityOrchestrator is ILiquidityOrchestrator {
         return (shouldRetry, allowPartialSwap, maxWaitTime);
     }
 
-    function validateAccountingBalance(bytes32 positionKey) external view returns (bool valid, uint256 discrepancy) {
+    function validateAccountingBalance(bytes32 positionKey, address token0, address token1) external view returns (bool valid, uint256 discrepancy) {
         PositionData storage p = positions[positionKey];
         if (!p.exists) {
             revert PositionNotFound();
         }
-        return (true, 0);
+
+        // expected token amounts in the position
+        uint256 expectedAmount0 = p.reserveAmount0 + p.totalLiquidity;
+        uint256 expectedAmount1 = p.reserveAmount1 + p.totalLiquidity;
+
+        // Actual token Amounts in Uniswap + Aave
+        uint256 actualUniswap0 = yieldManager.getUniswapPositionAmount0(token0,positionKey);
+        uint256 actualAave0 = yieldManager.getAavePositionAmount0(token0,positionKey);
+        uint256 actualUniswap1 = yieldManager.getUniswapPositionAmount1(token1,positionKey);
+        uint256 actualAave1 = yieldManager.getAavePositionAmount1(token1,positionKey);
+        uint256 actualTotal0 = actualUniswap0 + actualAave0;
+        uint256 actualTotal1 = actualUniswap1 + actualAave1;
+
+        if (actualTotal0 < expectedAmount0) {
+            discrepancy = expectedAmount0 - actualTotal0; 
+            valid = discrepancy < Constant.MAX_DISCREPANCY; // we have less tokens
+        } else if (actualTotal0 > expectedAmount0){
+            discrepancy = actualTotal0 - expectedAmount0;
+            valid = discrepancy < Constant.MAX_DISCREPANCY; // we have more tokens
+        } else {
+            discrepancy = 0;
+            valid = true;
+        }
+
+        return (valid, discrepancy);
+    }
+
+    function recordAaveDeposit(bytes32 positionKey, uint256 amount0, uint256 amount1) external {
+        PositionData storage p = positions[positionKey];
+        p.aaveAmount0 += amount0;
+        p.aaveAmount1 += amount1;
+        p.reserveAmount0 -= amount0; // Moved from reserve to Aave
+        p.reserveAmount1 -= amount1;
+    }
+
+    function recordAaveWithdrawal(bytes32 positionKey, uint256 amount0, uint256 amount1) external {
+        PositionData storage p = positions[positionKey];
+        p.aaveAmount0 -= amount0;
+        p.aaveAmount1 -= amount1;
+        p.reserveAmount0 += amount0; // Moved from Aave to reserve
+        p.reserveAmount1 += amount1;
     }
 
     function upsertPosition(bytes32 positionKey, PositionData calldata data) external override {
