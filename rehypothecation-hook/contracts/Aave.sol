@@ -36,14 +36,13 @@ abstract contract Aave is IAave {
         uint256 amount,
         address onBehalfOf,
         uint16 referralCode
-    ) external returns (uint256) {
+    ) external {
         if (asset == address(0) || amount <= 0 || onBehalfOf == address(0)) {
             revert InvalidInput();
         }
 
         IERC20(asset).approve(address(aave), amount);
         aave.supply(asset, amount, onBehalfOf, referralCode);
-        return amount;
     }
 
     function withdraw(
