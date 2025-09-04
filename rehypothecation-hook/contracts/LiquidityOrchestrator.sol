@@ -57,6 +57,7 @@ abstract contract LiquidityOrchestrator is ILiquidityOrchestrator {
      * @param currentTick Current tick before swap
      * @return needsWithdrawal True if position is currently active but liquidity is in Aave
      */
+
     function checkPreSwapLiquidityNeeds(
         bytes32 positionKey,
         int24 currentTick
@@ -67,6 +68,7 @@ abstract contract LiquidityOrchestrator is ILiquidityOrchestrator {
         }
 
         // Check if position is currently in range (swap will use this liquidity)
+
         bool currentlyInRange = (currentTick >= p.tickLower &&
             currentTick <= p.tickUpper);
 
@@ -81,6 +83,7 @@ abstract contract LiquidityOrchestrator is ILiquidityOrchestrator {
      * @param newTick Tick after swap
      * @return needsDeposit True if position became inactive and should go to Aave
      */
+
     function checkPostSwapLiquidityNeeds(
         bytes32 positionKey,
         int24 oldTick,
@@ -104,7 +107,7 @@ abstract contract LiquidityOrchestrator is ILiquidityOrchestrator {
     }
 
     /**
-     * @notice Execute pre-swap liquidity preparation (withdraw from Aave if needed)
+     * @notice Execute pre-swap liquidity preparation (withdraw from Aave if needed). To be called by beforeSwap hook
      * @param positionKey The position identifier
      * @param currentTick Current tick
      * @return success True if preparation successful
@@ -159,12 +162,13 @@ abstract contract LiquidityOrchestrator is ILiquidityOrchestrator {
     }
 
     /**
-     * @notice Execute post-swap liquidity management (deposit to Aave if position went out of range)
+     * @notice Execute post-swap liquidity management (deposit to Aave if position went out of range). To be called by afterSwap hook
      * @param positionKey The position identifier
      * @param oldTick Tick before swap
      * @param newTick Tick after swap
      * @return success True if post-swap management successful
      */
+
     function executePostSwapManagement(
         bytes32 positionKey,
         int24 oldTick,
@@ -180,6 +184,7 @@ abstract contract LiquidityOrchestrator is ILiquidityOrchestrator {
         lastActiveTick[positionKey] = oldTick; // Remember last active tick
 
         // Calculate amounts to deposit (keep reserve buffer)
+
         uint8 reservePCT = p.reservePct == 0
             ? Constant.DEFAULT_RESERVE_PCT
             : p.reservePct;
@@ -190,6 +195,7 @@ abstract contract LiquidityOrchestrator is ILiquidityOrchestrator {
         if (depositAmount0 == 0 && depositAmount1 == 0) {
             return true; // Nothing to deposit
         }
+
 
         try Aave.deposit(asset0, depositAmount0, msg.sender, 0) {
             try Aave.deposit(asset1, depositAmount1, msg.sender, 0) {
@@ -219,8 +225,146 @@ abstract contract LiquidityOrchestrator is ILiquidityOrchestrator {
     }
 
     /**
+     * @notice  This is a helper function to prepare position for withdrawal in case if the LP wants to withdraw. To be called by beforeRemoveLiquidity hook
+     * @param   positionKey  The position identifier
+     * @return  success  True if preparation was successful
+     */
+    function preparePositionForWithdrawal(bytes32 positionKey) external returns (bool success) {
+        PositionData storage p = positions[positionKey];
+        if (!p.exists) {
+            revert PositionNotFound();
+        }
+
+        if (p.state != PositionState.IN_AAVE) {
+            // Nothing to do - liquidity already in Uniswap
+            return true;
+        }
+
+        if (p.aaveAmount0 >= 0 && p.aaveAmount1 >= 0) {
+            try yieldManager.withdrawAllFromAave(positionKey) returns (uint256 withdrawn0, uint256 withdrawn1) {
+                // Update position - everything now in Uniswap (including yield)
+                p.reserveAmount0 += withdrawn0;
+                p.reserveAmount1 += withdrawn1;
+                p.aaveAmount0 = 0;
+                p.aaveAmount1 = 0;
+                p.state = PositionState.IN_RANGE;
+
+                emit PositionPreparedForWithdrawal(positionKey, withdrawn0, withdrawn1);
+                return true;
+            } catch Error(string memory reason) {
+                emit WithdrawalPreparationFailed(positionKey, reason);
+                return false; // This will cause the user's withdrawal to revert
+            }
+        }
+
+        return true; // Nothing to withdraw from Aave
+    }
+
+    /**
+     * @notice Handle post-withdrawal rebalance (called after user withdraws liquidity). To be called by afterRemoveLiquidity hook
+     * @param positionKey The position identifier
+     * @param currentTick Current tick after withdrawal
+     * @param liqAmount0 Amount of token0 available after user withdrawal
+     * @param liqAmount1 Amount of token1 available after user withdrawal
+     * @return success True if rebalance successful
+     */
+    function handlePostWithdrawalRebalance(
+        bytes32 positionKey,
+        int24 currentTick,
+        uint256 liqAmount0,
+        uint256 liqAmount1
+    ) external returns (bool success) {
+        PositionData storage p = positions[positionKey];
+        if (!p.exists) {
+            revert PositionNotFound();
+        }
+        p.reserveAmount0 = liqAmount0;
+        p.reserveAmount1 = liqAmount1;
+        p.aaveAmount0 = 0;
+        p.aaveAmount1 = 0;
+        p.totalLiquidity = liqAmount0 + liqAmount1;
+
+        bool outOfRange = (currentTick < p.tickLower || currentTick > p.tickUpper);
+        if (outOfRange && p.state == PositionState.IN_RANGE) {
+            // Position is out of range and liquidity is in Uniswap - deposit to Aave
+            uint256 amount0ToDeposit = (p.reserveAmount0 * 80) / 100;
+            uint256 amount1ToDeposit = (p.reserveAmount1 * 80) / 100;
+
+            if (amount0ToDeposit == 0 && amount1ToDeposit == 0) {
+                return true; // Nothing to deposit is there
+            }
+
+            try yieldManager.depositToAave(positionKey, amount0ToDeposit, amount1ToDeposit) {
+                p.reserveAmount0 -= amount0ToDeposit;
+                p.reserveAmount1 -= amount1ToDeposit;
+                p.aaveAmount0 += amount0ToDeposit;
+                p.aaveAmount1 += amount1ToDeposit;
+                p.state = PositionState.IN_AAVE;
+
+                return true;
+            } catch Error(string memory reason) {
+                emit DepositFailed(positionKey, reason);
+                return false;
+            }
+        }
+    }
+
+    /**
+     * @notice Process liquidity addition (called whenever user adds liquidity to position). To be called by afterAddLiquidity hook
+     * @param   positionKey  The position identifier
+     * @param   currentTick  The current tick of the position
+     * @param   liqAmount0  The amount of token0 being added
+     * @param   liqAmount1  The amount of token1 being added
+     * @return  success  True if the liquidity addition was processed successfully
+     */
+    function processLiquidityAdditionDeposit(
+        bytes32 positionKey,
+        int24 currentTick,
+        uint256 liqAmount0,
+        uint256 liqAmount1
+    ) external returns (bool success) {
+        PositionData storage p = positions[positionKey];
+        if (!p.exists) {
+            revert PositionNotFound();
+        }
+
+        bool outOfRange = (currentTick < p.tickLower || currentTick > p.tickUpper);
+
+        p.reserveAmount0 += liqAmount0;
+        p.reserveAmount1 += liqAmount1;
+        p.totalLiquidity += (liqAmount0 + liqAmount1);
+        if (outOfRange) {
+            // Position is out of range and liquidity is in Uniswap - deposit to Aave
+            p.state = PositionState.OUT_OF_RANGE;
+            uint256 amount0ToDeposit = (liqAmount0 * 80) / 100;
+            uint256 amount1ToDeposit = (liqAmount1 * 80) / 100;
+
+            if (amount0ToDeposit == 0 && amount1ToDeposit == 0) {
+                return true; // Nothing to deposit is there
+            }
+
+            try yieldManager.depositToAave(positionKey, amount0ToDeposit, amount1ToDeposit) {
+                p.reserveAmount0 -= amount0ToDeposit;
+                p.reserveAmount1 -= amount1ToDeposit;
+                p.aaveAmount0 += amount0ToDeposit;
+                p.aaveAmount1 += amount1ToDeposit;
+                p.state = PositionState.IN_AAVE;
+
+                return true;
+            } catch Error(string memory reason) {
+                emit DepositFailed(positionKey, reason);
+                return false;
+            }
+        } else {
+            p.state = PositionState.IN_RANGE;
+            return true;
+        }
+    }
+
+    /**
      * @notice Handle withdrawal failure with fallback strategies
      */
+
     function _handleWithdrawalFailure(
         bytes32 positionKey
     )
@@ -321,7 +465,6 @@ abstract contract LiquidityOrchestrator is ILiquidityOrchestrator {
         address asset1
     ) internal returns (bool success) {
         PositionData storage p = positions[positionKey];
-
         try Aave.withdraw(asset0, p.aaveAmount0, msg.sender) returns (
             uint256 withdrawn0
         ) {
@@ -357,7 +500,6 @@ abstract contract LiquidityOrchestrator is ILiquidityOrchestrator {
         if (!p.exists) {
             revert PositionNotFound();
         }
-
         return (
             p.reserveAmount0 + p.aaveAmount0,
             p.reserveAmount1 + p.aaveAmount1,
