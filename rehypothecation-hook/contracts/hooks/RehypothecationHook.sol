@@ -128,4 +128,24 @@ contract RehypothecationHooks is BaseHook, IRehypothecationHook {
 
      }
 
+     function afterSwap(
+        address sender, 
+        PoolKey calldata key, 
+        IPoolManager.SwapParams calldata params,
+        BalanceDelta delta, 
+        bytes calldata hookData
+    ) external override poolManagerOnly returns(bytes4 selector, int128 fee )
+     {
+        // Generate position key from pool key and sender
+        bytes32 positionKey = _generatePositionKey(key, sender);
+        
+        // Getting the old tick from LiquidityOrchestrator lastActiveTick 
+        int24 oldTick = liquidityOrchestrator.LastActiveTick(positionKey);
+
+        (, int24 newTick, , ) = poolManager.getSlot0(key.toId());
+
+        bool success = liquidityOrchestrator.executePostSwapManagement(positionKey, oldTick, newTick);
+
+        return (BaseHook.afterSwap.selector, 0);
+     }
 }
