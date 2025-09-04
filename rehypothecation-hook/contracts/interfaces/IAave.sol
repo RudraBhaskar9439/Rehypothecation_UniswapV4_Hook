@@ -17,7 +17,7 @@ interface IAave {
         uint256 amount,
         address onBehalfOf,
         uint16 referralCode
-    ) external returns (uint256); // can only be called from outside of the contract
+    ) external ; // can only be called from outside of the contract
 
     /**
      * @dev Withdraws an asset from the aave lending pool
