@@ -151,6 +151,28 @@ contract RehypothecationHooks is BaseHook, ILiquidityOrchestrator {
         return (this.afterAddLiquidity.selector, delta);
     }
 
+    function _beforeRemoveLiquidity(
+        address sender,
+        PoolKey calldata key,
+        ModifyLiquidityParams calldata params,
+        bytes calldata hookData
+    ) internal override returns (bytes4 selector) {
+        // Generate position key from pool key and sender
+        bytes32 positionKey = _generatePositionKey(key, sender);
+        (, int24 currentTick,,) = poolManager.getSlot0(key.toId());
+
+        address asset0 = Currency.unwrap(key.currency0);
+        address asset1 = Currency.unwrap(key.currency1);
+
+        bool success = liquidityOrchestrator.preparePreSwapLiquidity(positionKey, currentTick, asset0, asset1);
+
+        if (!success) {
+            revert LiquidityRemovalFailed();
+        }
+
+        return (this.beforeRemoveLiquidity.selector);
+    }
+
     /**
      * @dev Hook called before a swap to ensure sufficient liquidity.
      * @param key => The pool key
@@ -176,8 +198,11 @@ contract RehypothecationHooks is BaseHook, ILiquidityOrchestrator {
         address token1 = Currency.unwrap(key.currency1);
 
         // Call LiquidityOrchestrator to prepare pre-swap liquidity
-        (bool success, uint256 availableAmount0, uint256 availableAmount1) =
-            liquidityOrchestrator.preparePreSwapLiquidity(positionKey, currentTick, token0, token1);
+        bool success = liquidityOrchestrator.preparePreSwapLiquidity(positionKey, currentTick, token0, token1);
+
+        if (!success) {
+            revert PreSwapLiquidityPreparationFailed();
+        }
 
         return (BaseHook.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, 0);
     }
