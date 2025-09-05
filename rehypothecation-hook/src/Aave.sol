@@ -8,18 +8,9 @@ interface IERC20 {
 }
 
 interface ILendingPool {
-    function supply(
-        address asset,
-        uint256 amount,
-        address onBehalfOf,
-        uint16 referralCode
-    ) public virtual override;
+    function supply(address asset, uint256 amount, address onBehalfOf, uint16 referralCode) external virtual;
 
-    function withdraw(
-        address asset,
-        uint256 amount,
-        address to
-    ) public virtual override returns (uint256);
+    function withdraw(address asset, uint256 amount, address to) external virtual override returns (uint256);
 }
 
 abstract contract Aave is IAave {
@@ -31,12 +22,7 @@ abstract contract Aave is IAave {
         aave = ILendingPool(_aave);
     }
 
-    function deposit(
-        address asset,
-        uint256 amount,
-        address onBehalfOf,
-        uint16 referralCode
-    ) external {
+    function deposit(address asset, uint256 amount, address onBehalfOf, uint16 referralCode) external {
         if (asset == address(0) || amount <= 0 || onBehalfOf == address(0)) {
             revert InvalidInput();
         }
@@ -45,11 +31,7 @@ abstract contract Aave is IAave {
         aave.supply(asset, amount, onBehalfOf, referralCode);
     }
 
-    function withdraw(
-        address asset,
-        uint256 amount,
-        address to
-    ) external returns (uint256) {
+    function withdraw(address asset, uint256 amount, address to) external returns (uint256) {
         if (asset == address(0) || amount <= 0 || to == address(0)) {
             revert InvalidInput();
         }

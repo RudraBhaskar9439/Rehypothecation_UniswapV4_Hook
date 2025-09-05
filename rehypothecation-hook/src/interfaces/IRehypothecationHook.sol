@@ -1,7 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.19;
-
-// Simplified interface without Uniswap v4 dependancies for now
+pragma solidity ^0.8.26;
 
 interface IRehypothecationHook {
     /**
@@ -19,68 +17,53 @@ interface IRehypothecationHook {
      * @dev Emitted when liquidity is deposited to Aave
      */
     event LiquidityDepositedToAave(
-        address indexed owner,
-        uint256 indexed tokenId,
-        address asset,
-        uint256 amount,
-        uint256 timestamp
+        address indexed owner, uint256 indexed tokenId, address asset, uint256 amount, uint256 timestamp
     );
 
     /**
      * @dev Emitted when liquidity is withdrawn from Aave
      */
-
-     event LiquidityWithdrawnFromAave(
-        address indexed owner,
-        uint256 indexed tokenId,
-        address asset,
-        uint256 amount,
-        uint256 timestamp
-     );
+    event LiquidityWithdrawnFromAave(
+        address indexed owner, uint256 indexed tokenId, address asset, uint256 amount, uint256 timestamp
+    );
 
     /**
      * @dev Emitted when emergency withdrawl is triggered
      */
     event EmergencyWithdrawalTriggered(
-        address indexed owner,
-        uint256 indexed tokenId,
-        address asset,
-        uint256 amount,
-        uint256 timestamp
+        address indexed owner, uint256 indexed tokenId, address asset, uint256 amount, uint256 timestamp
     );
 
     /**
      * @dev Enum representing the state of an LP position
      */
+    enum PositionState {
+        IN_RANGE, // Position id currently active in Uniswap
+        OUT_OF_RANGE, // Position is idle and deposited in Aave
+        AAVE_STUCK // Position is stuck in Aave due to liquidity issues
 
-     enum PositionState {
-        IN_RANGE,    // Position id currently active in Uniswap
-        OUT_OF_RANGE,// Position is idle and deposited in Aave
-        AAVE_STUCK   // Position is stuck in Aave due to liquidity issues
-     }
+    }
 
     /**
      * @dev Struct representing LP position data
      */
     struct PositionData {
         PositionState state;
-        uint256 reservePercentage;    // Percentage kept as reserve (e.g., 20%)
-        uint256 aaveAllocation;      // Amount currently in Aave
-        uint256 uniswapAllocation;  // Amount currently in Uniswap
-        uint256 lastStateChange;    // Timestamp of last state change
-        bool isActive;              // Whether position is currently active  
+        uint256 reservePercentage; // Percentage kept as reserve (e.g., 20%)
+        uint256 aaveAllocation; // Amount currently in Aave
+        uint256 uniswapAllocation; // Amount currently in Uniswap
+        uint256 lastStateChange; // Timestamp of last state change
+        bool isActive; // Whether position is currently active
     }
 
     /**
      * @dev Returns the position data for a given token ID
      */
-
-     function getPositionData(uint256 tokenId) external view returns (PositionData memory);
+    function getPositionData(uint256 tokenId) external view returns (PositionData memory);
 
     /**
      * @dev Returns the current state of a position
      */
-
     function getPositionState(uint256 tokenId) external view returns (PositionState);
 
     /**
