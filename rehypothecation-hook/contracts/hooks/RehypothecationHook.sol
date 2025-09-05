@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-// Remapping karne ka maan nhi koi krdo 
 import {BaseHook} from "../../lib/v4-periphery/src/utils/BaseHook.sol";
 import {Hooks} from "../../lib/v4-core/src/libraries/Hooks.sol";
 import {IPoolManager} from "../../lib/v4-core/src/interfaces/IPoolManager.sol";
@@ -21,14 +20,12 @@ import {LiquidityOrchestrator} from "../LiquidityOrchestrator.sol";
 
 import {ILiquidityOrchestrator} from "../interfaces/ILiquidityOrchestrator.sol";
 
-
-
 contract RehypothecationHooks is BaseHook, IRehypothecationHook {
     using PoolIdLibrary for PoolKey;
     using SafeCast for uint256;
     using CurrencyLibrary for Currency;
 
-    // State Variable 
+    // State Variable
     IAave public immutable aavePool;
     LiquidityOrchestrator public immutable liquidityOrchestrator;
     mapping(bytes32 => uint256) public emergencyWithdrawlTimestamps;
@@ -40,17 +37,12 @@ contract RehypothecationHooks is BaseHook, IRehypothecationHook {
     event HookInitialized(address indexed poolManager, address indexed aavePool);
     event ReservePercentageUpdated(bytes32 indexed positionKey, uint256 oldPercentage, uint256 newPercentage);
     event EmergencyWithdrawalTriggered(
-        address indexed caller,
-        bytes32 indexed positionKey,
-        address asset,
-        uint256 amount,
-        uint256 timestamp
+        address indexed caller, bytes32 indexed positionKey, address asset, uint256 amount, uint256 timestamp
     );
 
     modifier onlyOwner() {
         require(msg.sender == owner, " Only Owner");
         _;
-
     }
 
     /**
@@ -59,21 +51,17 @@ contract RehypothecationHooks is BaseHook, IRehypothecationHook {
      * @param _aavePool The Aave Pool contract for yield generation
      * @param _liquidityOrchestrator The LiquidityOrchestrator contract
      */
-
-     constructor(
-        IPoolManager _poolManager,
-        IAave _aavePool,
-        LiquidityOrchestrator _liquidityOrchestrator
-     ) BaseHook(_poolManager) {
+    constructor(IPoolManager _poolManager, IAave _aavePool, LiquidityOrchestrator _liquidityOrchestrator)
+        BaseHook(_poolManager)
+    {
         aavePool = _aavePool;
         liquidityOrchestrator = _liquidityOrchestrator;
         owner = msg.sender;
 
         emit HookInitialized(address(_poolManager), address(_aavePool));
-    
-     }
+    }
 
-     /**
+    /**
      * @dev Returns the hook permissions required for this contract
      */
     function getHookPermissions() public pure override returns (Hooks.Permissions memory) {
@@ -104,48 +92,42 @@ contract RehypothecationHooks is BaseHook, IRehypothecationHook {
      * @return beforeSwapDelta => The delta to apply befoe swap
      * @return fee => The fee to apply
      */
-
-     function beforeSwap(
+    function beforeSwap(
         address sender, // Address calling the swap
         PoolKey calldata key, // PoolKey which identifies the specific pool
         IPoolManager.SwapParams calldata params,
         bytes calldata hookData // Extra data passed to the hook by the swpa caller
-     ) external override poolManagerOnly returns (bytes4 selector, BeforeSwapDelta beforeSwapDelta, uint24 fee)
-     {
-
+    ) external override poolManagerOnly returns (bytes4 selector, BeforeSwapDelta beforeSwapDelta, uint24 fee) {
         // Fetching current tick from pool manager
-        (, int24 currentTick, , ) = poolManager.getSlot0(key.toId());
+        (, int24 currentTick,,) = poolManager.getSlot0(key.toId());
 
         // Generate position key from pool key and sender
         bytes32 positionKey = _generatePositionKey(key, sender);
 
         // Call LiquidityOrchestrator to prepare pre-swap liquidity
-        (bool success, uint256 availableAmount0, uint256 availableAmount1) = 
+        (bool success, uint256 availableAmount0, uint256 availableAmount1) =
             liquidityOrchestrator.preparePreSwapLiquidity(positionKey, currentTick);
 
         return (BaseHook.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, 0);
+    }
 
-
-     }
-
-     function afterSwap(
-        address sender, 
-        PoolKey calldata key, 
+    function afterSwap(
+        address sender,
+        PoolKey calldata key,
         IPoolManager.SwapParams calldata params,
-        BalanceDelta delta, 
+        BalanceDelta delta,
         bytes calldata hookData
-    ) external override poolManagerOnly returns(bytes4 selector, int128 fee )
-     {
+    ) external override poolManagerOnly returns (bytes4 selector, int128 fee) {
         // Generate position key from pool key and sender
         bytes32 positionKey = _generatePositionKey(key, sender);
-        
-        // Getting the old tick from LiquidityOrchestrator lastActiveTick 
+
+        // Getting the old tick from LiquidityOrchestrator lastActiveTick
         int24 oldTick = liquidityOrchestrator.LastActiveTick(positionKey);
 
-        (, int24 newTick, , ) = poolManager.getSlot0(key.toId());
+        (, int24 newTick,,) = poolManager.getSlot0(key.toId());
 
         bool success = liquidityOrchestrator.executePostSwapManagement(positionKey, oldTick, newTick);
 
         return (BaseHook.afterSwap.selector, 0);
-     }
+    }
 }
