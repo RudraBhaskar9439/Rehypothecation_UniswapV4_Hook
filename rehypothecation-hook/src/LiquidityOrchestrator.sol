@@ -11,7 +11,6 @@ abstract contract LiquidityOrchestrator is ILiquidityOrchestrator {
 
     error PositionNotFound();
     error NotOwner();
-    error PreSwapLiquidityPreparationFailed(bytes32 positionKey);
 
     using Constant for uint256;
 
@@ -35,12 +34,16 @@ abstract contract LiquidityOrchestrator is ILiquidityOrchestrator {
 
     event HandlingRebalanceFailure(bytes32 positionKey, bool success);
     event PositionUpserted(bytes32 positionKey, address owner);
-    event PositionPaused(bytes32 positionKey);
     event PositionResumed(bytes32 positionKey);
     event StuckPositionRecovered(bytes32 positionKey);
     event PreSwapLiquidityPrepared(bytes32 positionKey, bool wasInAave, uint256 amount0, uint256 amount1);
     event PostSwapLiquidityDeposited(bytes32 positionKey, bool wasInAave, uint256 amount0, uint256 amount1);
     event DepositFailed(bytes32 positionKey, string reason);
+    event WithdrawalFailed(bytes32 positionKey, string reason);
+    event PreparePositionForWithdrawed(bytes32 positionKey, uint256 amount);
+    event PreparePositionForWithdrawalFailed(bytes32 positionKey, string reason);
+    event PostWithdrawalLiquidityDeposited(bytes32 positionKey, uint256 amount);
+    event PostAddLiquidityDeposited(bytes32 positionKey, uint256 amount);
 
     /**
      * @notice Check if position needs liquidity withdrawal BEFORE swap (current range has liquidity in Aave)
@@ -188,7 +191,10 @@ abstract contract LiquidityOrchestrator is ILiquidityOrchestrator {
      * @param   positionKey  The position identifier
      * @return  success  True if preparation was successful
      */
-    function preparePositionForWithdrawal(bytes32 positionKey) external returns (bool success) {
+    function preparePositionForWithdrawal(bytes32 positionKey, address asset0, address asset1)
+        external
+        returns (bool success)
+    {
         PositionData storage p = positions[positionKey];
         if (!p.exists) {
             revert PositionNotFound();
@@ -200,19 +206,25 @@ abstract contract LiquidityOrchestrator is ILiquidityOrchestrator {
         }
 
         if (p.aaveAmount0 >= 0 && p.aaveAmount1 >= 0) {
-            try yieldManager.withdrawAllFromAave(positionKey) returns (uint256 withdrawn0, uint256 withdrawn1) {
-                // Update position - everything now in Uniswap (including yield)
-                p.reserveAmount0 += withdrawn0;
-                p.reserveAmount1 += withdrawn1;
-                p.aaveAmount0 = 0;
-                p.aaveAmount1 = 0;
-                p.state = PositionState.IN_RANGE;
+            try Aave.withdraw(asset0, p.aaveAmount0, msg.sender) returns (uint256 withdrawnAmount0) {
+                try Aave.withdraw(asset1, p.aaveAmount1, msg.sender) returns (uint256 withdrawnAmount1) {
+                    p.state = PositionState.IN_RANGE;
+                    p.reserveAmount0 += withdrawnAmount0;
+                    p.reserveAmount1 += withdrawnAmount1;
+                    p.aaveAmount0 = 0;
+                    p.aaveAmount1 = 0;
 
-                emit PositionPreparedForWithdrawal(positionKey, withdrawn0, withdrawn1);
+                    emit PreparePositionForWithdrawed(positionKey, withdrawnAmount1);
+                } catch {
+                    emit PreparePositionForWithdrawalFailed(positionKey, "Token1 withdrawal failed");
+                    return false;
+                }
+
+                emit PreparePositionForWithdrawed(positionKey, withdrawnAmount0);
                 return true;
-            } catch Error(string memory reason) {
-                emit WithdrawalPreparationFailed(positionKey, reason);
-                return false; // This will cause the user's withdrawal to revert
+            } catch {
+                emit PreparePositionForWithdrawalFailed(positionKey, "Token0 withdrawal failed");
+                return false;
             }
         }
 
@@ -231,7 +243,9 @@ abstract contract LiquidityOrchestrator is ILiquidityOrchestrator {
         bytes32 positionKey,
         int24 currentTick,
         uint256 liqAmount0,
-        uint256 liqAmount1
+        uint256 liqAmount1,
+        address asset0,
+        address asset1
     ) external returns (bool success) {
         PositionData storage p = positions[positionKey];
         if (!p.exists) {
@@ -253,16 +267,23 @@ abstract contract LiquidityOrchestrator is ILiquidityOrchestrator {
                 return true; // Nothing to deposit is there
             }
 
-            try yieldManager.depositToAave(positionKey, amount0ToDeposit, amount1ToDeposit) {
+            try Aave.deposit(asset0, amount0ToDeposit, msg.sender, 0) {
+                try Aave.deposit(asset1, amount1ToDeposit, msg.sender, 0) {
+                    emit PostWithdrawalLiquidityDeposited(positionKey, amount1ToDeposit);
+                } catch {
+                    emit DepositFailed(positionKey, "Token1 deposit failed");
+                    return false;
+                }
                 p.reserveAmount0 -= amount0ToDeposit;
                 p.reserveAmount1 -= amount1ToDeposit;
                 p.aaveAmount0 += amount0ToDeposit;
                 p.aaveAmount1 += amount1ToDeposit;
                 p.state = PositionState.IN_AAVE;
 
+                emit PostWithdrawalLiquidityDeposited(positionKey, amount0ToDeposit);
                 return true;
-            } catch Error(string memory reason) {
-                emit DepositFailed(positionKey, reason);
+            } catch {
+                emit DepositFailed(positionKey, "Token0 or Token1 deposit failed");
                 return false;
             }
         }
@@ -280,7 +301,9 @@ abstract contract LiquidityOrchestrator is ILiquidityOrchestrator {
         bytes32 positionKey,
         int24 currentTick,
         uint256 liqAmount0,
-        uint256 liqAmount1
+        uint256 liqAmount1,
+        address asset0,
+        address asset1
     ) external returns (bool success) {
         PositionData storage p = positions[positionKey];
         if (!p.exists) {
@@ -294,7 +317,7 @@ abstract contract LiquidityOrchestrator is ILiquidityOrchestrator {
         p.totalLiquidity += (liqAmount0 + liqAmount1);
         if (outOfRange) {
             // Position is out of range and liquidity is in Uniswap - deposit to Aave
-            p.state = PositionState.OUT_OF_RANGE;
+            p.state = PositionState.IN_RANGE;
             uint256 amount0ToDeposit = (liqAmount0 * 80) / 100;
             uint256 amount1ToDeposit = (liqAmount1 * 80) / 100;
 
@@ -302,16 +325,23 @@ abstract contract LiquidityOrchestrator is ILiquidityOrchestrator {
                 return true; // Nothing to deposit is there
             }
 
-            try yieldManager.depositToAave(positionKey, amount0ToDeposit, amount1ToDeposit) {
+            try Aave.deposit(asset0, amount0ToDeposit, msg.sender, 0) {
+                try Aave.deposit(asset1, amount1ToDeposit, msg.sender, 0) {
+                    emit PostWithdrawalLiquidityDeposited(positionKey, amount1ToDeposit);
+                } catch {
+                    emit DepositFailed(positionKey, "Token1 deposit failed");
+                    return false;
+                }
                 p.reserveAmount0 -= amount0ToDeposit;
                 p.reserveAmount1 -= amount1ToDeposit;
                 p.aaveAmount0 += amount0ToDeposit;
                 p.aaveAmount1 += amount1ToDeposit;
                 p.state = PositionState.IN_AAVE;
 
+                emit PostAddLiquidityDeposited(positionKey, amount0ToDeposit);
                 return true;
-            } catch Error(string memory reason) {
-                emit DepositFailed(positionKey, reason);
+            } catch {
+                emit DepositFailed(positionKey, "Token0 or Token1 deposit failed");
                 return false;
             }
         } else {
@@ -369,7 +399,7 @@ abstract contract LiquidityOrchestrator is ILiquidityOrchestrator {
     /**
      * @notice Retry stuck positions - attempt to withdraw from Aave again
      */
-    function retryStuckPositions() external {
+    function retryStuckPositions(address asset0, address asset1) external {
         uint256 len = stuckPositions.length;
         if (len == 0) return;
 
@@ -379,7 +409,7 @@ abstract contract LiquidityOrchestrator is ILiquidityOrchestrator {
         for (uint256 i = 0; i < len;) {
             bytes32 positionKey = stuckPositions[i];
 
-            if (_tryRecoverStuckPosition(positionKey)) {
+            if (_tryRecoverStuckPosition(positionKey, asset0, asset1)) {
                 // Recovery successful
                 positions[positionKey].state = PositionState.IN_RANGE;
             } else {
@@ -400,31 +430,6 @@ abstract contract LiquidityOrchestrator is ILiquidityOrchestrator {
             unchecked {
                 ++i;
             }
-        }
-    }
-
-    /**
-     * @notice Try to recover a stuck position
-     */
-    function _tryRecoverStuckPosition(bytes32 positionKey, address asset0, address asset1)
-        internal
-        returns (bool success)
-    {
-        PositionData storage p = positions[positionKey];
-        try Aave.withdraw(asset0, p.aaveAmount0, msg.sender) returns (uint256 withdrawn0) {
-            try Aave.withdraw(asset1, p.aaveAmount1, msg.sender) returns (uint256 withdrawn1) {
-                // Update position
-                p.reserveAmount0 += withdrawn0;
-                p.reserveAmount1 += withdrawn1;
-                p.aaveAmount0 = 0;
-                p.aaveAmount1 = 0;
-
-                return true;
-            } catch {
-                return false;
-            }
-        } catch {
-            return false;
         }
     }
 
