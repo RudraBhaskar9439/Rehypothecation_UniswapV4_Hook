@@ -36,8 +36,8 @@ abstract contract LiquidityOrchestrator is ILiquidityOrchestrator {
     event PositionUpserted(bytes32 positionKey, address owner);
     event PositionResumed(bytes32 positionKey);
     event StuckPositionRecovered(bytes32 positionKey);
-    event PreSwapLiquidityPrepared(bytes32 positionKey, bool wasInAave, uint256 amount0, uint256 amount1);
-    event PostSwapLiquidityDeposited(bytes32 positionKey, bool wasInAave, uint256 amount0, uint256 amount1);
+    event PreSwapLiquidityPrepared(bytes32 positionKey, uint256 amount0, uint256 amount1);
+    event PostSwapLiquidityDeposited(bytes32 positionKey, uint256 amount0, uint256 amount1);
     event DepositFailed(bytes32 positionKey, string reason);
     event WithdrawalFailed(bytes32 positionKey, string reason);
     event PreparePositionForWithdrawed(bytes32 positionKey, uint256 amount);
@@ -54,7 +54,7 @@ abstract contract LiquidityOrchestrator is ILiquidityOrchestrator {
     function checkPreSwapLiquidityNeeds(bytes32 positionKey, int24 currentTick)
         public
         view
-        returns (bool needsWithdrawl)
+        returns (bool needsWithdrawal)
     {
         PositionData storage p = positions[positionKey];
         if (!p.exists || p.totalLiquidity < Constant.MIN_POSITION_SIZE) {
@@ -104,7 +104,7 @@ abstract contract LiquidityOrchestrator is ILiquidityOrchestrator {
      */
     function preparePreSwapLiquidity(bytes32 positionKey, int24 currentTick, address asset0, address asset1)
         external
-        returns (bool success, uint256 availableAmount0, uint256 avaavailableAmount1)
+        returns (bool success, uint256 availableAmount0, uint256 availableAmount1)
     {
         if (!checkPreSwapLiquidityNeeds(positionKey, currentTick)) {
             PositionData memory p = positions[positionKey];
@@ -121,7 +121,7 @@ abstract contract LiquidityOrchestrator is ILiquidityOrchestrator {
                 p.aaveAmount0 = 0;
                 p.aaveAmount1 = 0;
 
-                emit PreSwapLiquidityPrepared(positionKey, true, withdrawnAmount0, withdrawnAmount1);
+                emit PreSwapLiquidityPrepared(positionKey, withdrawnAmount0, withdrawnAmount1);
                 return (true, p.reserveAmount0, p.reserveAmount1);
             } catch {
                 return _handleWithdrawalFailure(positionKey);
@@ -312,14 +312,11 @@ abstract contract LiquidityOrchestrator is ILiquidityOrchestrator {
 
         bool outOfRange = (currentTick < p.tickLower || currentTick > p.tickUpper);
 
-        p.reserveAmount0 += liqAmount0;
-        p.reserveAmount1 += liqAmount1;
-        p.totalLiquidity += (liqAmount0 + liqAmount1);
         if (outOfRange) {
             // Position is out of range and liquidity is in Uniswap - deposit to Aave
             p.state = PositionState.IN_RANGE;
-            uint256 amount0ToDeposit = (liqAmount0 * 80) / 100;
-            uint256 amount1ToDeposit = (liqAmount1 * 80) / 100;
+            uint256 amount0ToDeposit = (liqAmount0 * (100 - Constant.DEFAULT_RESERVE_PCT)) / 100;
+            uint256 amount1ToDeposit = (liqAmount1 * (100 - Constant.DEFAULT_RESERVE_PCT)) / 100;
 
             if (amount0ToDeposit == 0 && amount1ToDeposit == 0) {
                 return true; // Nothing to deposit is there
@@ -451,17 +448,15 @@ abstract contract LiquidityOrchestrator is ILiquidityOrchestrator {
     // Position management functions
     function upsertPosition(bytes32 positionKey, PositionData calldata data) external override {
         positions[positionKey] = data;
-        positions[positionKey].exists = true;
-        positions[positionKey].state = PositionState.IN_RANGE; // Initially in Uniswap
         emit PositionUpserted(positionKey, data.owner);
     }
 
     function getPosition(bytes32 positionKey) external view returns (PositionData memory) {
-        PositionData storage p = positions[positionKey];
-        if (!p.exists) {
-            revert PositionNotFound();
-        }
-        return p;
+        return positions[positionKey];
+    }
+
+    function isPositionExists(bytes32 positionKey) external view returns (bool) {
+        return positions[positionKey].exists;
     }
 
     function pausePosition(bytes32 positionKey) external override onlyOwner {

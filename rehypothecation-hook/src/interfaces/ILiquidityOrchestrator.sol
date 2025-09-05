@@ -29,16 +29,6 @@ interface ILiquidityOrchestrator {
         PositionState state; // Current state of position
     }
 
-    // Events
-    event PositionUpserted(bytes32 indexed positionKey, address indexed owner);
-    event PositionPaused(bytes32 indexed positionKey);
-    event PositionResumed(bytes32 indexed positionKey);
-    event StuckPositionRecovered(bytes32 indexed positionKey);
-    event PreSwapLiquidityPrepared(bytes32 indexed positionKey, bool wasInAave, uint256 amount0, uint256 amount1);
-    event PostSwapLiquidityDeposited(bytes32 indexed positionKey, uint256 amount0, uint256 amount1);
-    event DepositFailed(bytes32 indexed positionKey, string reason);
-    event WithdrawalFailed(bytes32 indexed positionKey, string reason);
-
     function checkPreSwapLiquidityNeeds(bytes32 positionKey, int24 currentTick)
         external
         view
