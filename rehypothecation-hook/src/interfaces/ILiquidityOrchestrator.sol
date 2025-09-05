@@ -16,7 +16,6 @@ interface ILiquidityOrchestrator {
 
     // Structs
     struct PositionData {
-        address owner; // Owner of the LP position
         int24 tickLower; // Lower tick of the position range
         int24 tickUpper; // Upper tick of the position range
         uint256 totalLiquidity; // Total liquidity amount

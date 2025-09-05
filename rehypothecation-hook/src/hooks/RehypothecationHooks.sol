@@ -124,7 +124,6 @@ contract RehypothecationHooks is BaseHook, ILiquidityOrchestrator {
         uint256 totalLiquidity = amount0In + amount1In;
 
         PositionData memory data = PositionData({
-            owner: sender,
             tickLower: params.tickLower,
             tickUpper: params.tickUpper,
             totalLiquidity: totalLiquidity,
@@ -164,7 +163,7 @@ contract RehypothecationHooks is BaseHook, ILiquidityOrchestrator {
         address asset0 = Currency.unwrap(key.currency0);
         address asset1 = Currency.unwrap(key.currency1);
 
-        bool success = liquidityOrchestrator.preparePreSwapLiquidity(positionKey, currentTick, asset0, asset1);
+        bool success = liquidityOrchestrator.preparePositionForWithdrawal(positionKey, asset0, asset1);
 
         if (!success) {
             revert LiquidityRemovalFailed();
@@ -255,6 +254,21 @@ contract RehypothecationHooks is BaseHook, ILiquidityOrchestrator {
         (int24 upperTick, int24 lowerTick) = abi.decode(hookData, (int24, int24));
 
         bytes32 positionKey = _generatePositionKey(key, lowerTick, upperTick);
+        PositionData memory p = liquidityOrchestrator.getPosition(positionKey);
+
+        if (params.zeroForOne) {
+            // token0 -> token1
+            uint256 amount0In = delta.amount0 < 0 ? uint256(int256(-delta.amount0())) : 0;
+            p.reserveAmount0 += amount0In;
+            uint256 amount1Out = delta.amount1 > 0 ? uint256(int256(delta.amount1())) : 0;
+            p.reserveAmount1 -= amount1Out;
+        } else {
+            // token1 -> token0
+            uint256 amount1In = delta.amount1 < 0 ? uint256(int256(-delta.amount1())) : 0;
+            p.reserveAmount1 += amount1In;
+            uint256 amount0Out = delta.amount0 > 0 ? uint256(int256(delta.amount0())) : 0;
+            p.reserveAmount0 -= amount0Out;
+        }
 
         bool success = liquidityOrchestrator.executePostSwapManagement(positionKey, oldTick, newTick);
 
