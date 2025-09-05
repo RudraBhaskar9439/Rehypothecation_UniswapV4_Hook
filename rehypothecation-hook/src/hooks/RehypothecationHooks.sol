@@ -69,9 +69,9 @@ contract RehypothecationHooks is BaseHook, ILiquidityOrchestrator {
             beforeInitialize: false,
             afterInitialize: false,
             beforeAddLiquidity: false,
-            afterAddLiquidity: false,
-            beforeRemoveLiquidity: false,
-            afterRemoveLiquidity: false,
+            afterAddLiquidity: true,
+            beforeRemoveLiquidity: true,
+            afterRemoveLiquidity: true,
             beforeSwap: true,
             afterSwap: true,
             beforeDonate: false,
@@ -171,6 +171,36 @@ contract RehypothecationHooks is BaseHook, ILiquidityOrchestrator {
         }
 
         return (this.beforeRemoveLiquidity.selector);
+    }
+
+    function _afterRemoveLiquidity(
+        address sender,
+        PoolKey calldata key,
+        ModifyLiquidityParams calldata params,
+        BalanceDelta delta,
+        BalanceDelta feeAccured,
+        bytes calldata hookData
+    ) internal override returns (bytes4 selector) {
+        // Generate position key from pool key and sender
+        bytes32 positionKey = _generatePositionKey(key,sender);
+        (,int24 currentTick , , ) = poolManager.getSlot0(key.toId());
+
+        // Calculate the amount to be withdrawn 
+        // WHen liq is removed , delta is +ve (tokens returned to user)
+        uint256 liqAmount0 = delta.amount0 > 0 ? uint256(int256(delta.amount0())) : 0;
+        uint256 liqAmount1 = delta.amount1 > 0 ? uint256(int256(delta.amount1())) : 0;
+
+        address asset0 = Currency.unwrap(key.currency0);
+        address asset1 = Currency.unwrap(key.currency1);
+
+        // Calling ther liqorchestrator contract to handle post-withdrawal rebalance
+        bool success = liquidityOrchestrator.handlePostWithdrawalRebalance(positionKey, currentTick, liqAmount0, liqAmount1, asset0, asset1);
+
+        if (!success) {
+            revert PostWithdrawalRebalanceFailed();
+        }
+        
+        return this.afterRemoveLiquidity.selector;
     }
 
     /**
