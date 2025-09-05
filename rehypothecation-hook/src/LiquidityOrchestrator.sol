@@ -57,8 +57,8 @@ abstract contract LiquidityOrchestrator is ILiquidityOrchestrator {
         returns (bool needsWithdrawal)
     {
         PositionData storage p = positions[positionKey];
-        if (!p.exists || p.totalLiquidity < Constant.MIN_POSITION_SIZE) {
-            return false;
+        if (!p.exists) {
+            revert PositionNotFound();
         }
 
         // Check if position is currently in range (swap will use this liquidity)
@@ -82,7 +82,7 @@ abstract contract LiquidityOrchestrator is ILiquidityOrchestrator {
         returns (bool needsDeposit)
     {
         PositionData storage p = positions[positionKey];
-        if (!p.exists || p.totalLiquidity < Constant.MIN_POSITION_SIZE) {
+        if (!p.exists) {
             return false;
         }
 
