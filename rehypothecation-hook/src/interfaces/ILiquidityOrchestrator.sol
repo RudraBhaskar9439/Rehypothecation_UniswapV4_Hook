@@ -78,4 +78,11 @@ interface ILiquidityOrchestrator {
      * @notice Retry all stuck positions to recover from Aave
      */
     function retryStuckPositions() external;
+
+    /**
+     * 
+     * @notice lastActiveTick for a given positionKey to a new tick value
+     * @notice typically called by the hook to maintain an accuracy history of where a position was last active.
+     */
+    function setLastActiveTick(bytes32 positionKey, int24 tick) external;
 }

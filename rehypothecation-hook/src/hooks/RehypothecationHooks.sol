@@ -143,6 +143,8 @@ contract RehypothecationHooks is BaseHook, ILiquidityOrchestrator {
         // This will create a new position.
         liquidityOrchestrator.upsertPosition(positionKey, data);
 
+        liquidityOrchestrator.setLastActiveTick(positionKey, currentTick);
+
         bool success = liquidityOrchestrator.processLiquidityAdditionDeposit(
             positionKey, currentTick, amount0In, amount1In, asset0, asset1
         );
@@ -226,6 +228,10 @@ contract RehypothecationHooks is BaseHook, ILiquidityOrchestrator {
         // Fetching current tick from pool manager
         (, int24 currentTick,,) = poolManager.getSlot0(key.toId());
 
+        PositionData memory p = liquidityOrchestrator.getPosition(positionKey);
+            int24 lowerTick = p.tickLower;
+            int24 upperTick = p.tickUpper;
+
         (int24 upperTick, int24 lowerTick) = abi.decode(hookData, (int24, int24));
 
         bytes32 positionKey = _generatePositionKey(key, lowerTick, upperTick);
@@ -234,7 +240,11 @@ contract RehypothecationHooks is BaseHook, ILiquidityOrchestrator {
         address token1 = Currency.unwrap(key.currency1);
 
         // Call LiquidityOrchestrator to prepare pre-swap liquidity
-        bool success = liquidityOrchestrator.preparePreSwapLiquidity(positionKey, currentTick, token0, token1);
+        bool success = liquidityOrchestrator.preparePreSwapLiquidity(
+            positionKey,
+            currentTick, // This currentTick is used here.
+            token0,
+            token1);
 
         if (!success) {
             revert PreSwapLiquidityPreparationFailed();
@@ -251,7 +261,7 @@ contract RehypothecationHooks is BaseHook, ILiquidityOrchestrator {
         bytes calldata hookData
     ) external override returns (bytes4 selector, int128 fee) {
         // Getting the old tick from LiquidityOrchestrator lastActiveTick
-        int24 oldTick = liquidityOrchestrator.LastActiveTick(positionKey);
+        int24 oldTick = liquidityOrchestrator.lastActiveTick(positionKey);
 
         (, int24 newTick,,) = poolManager.getSlot0(key.toId());
 
