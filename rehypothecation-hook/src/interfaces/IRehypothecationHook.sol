@@ -2,6 +2,11 @@
 pragma solidity ^0.8.26;
 
 interface IRehypothecationHook {
+    // Errors used by hooks
+    error LiquidityAdditionFailed();
+    error LiquidityRemovalFailed();
+    error PostWithdrawalRebalanceFailed();
+    error PreSwapLiquidityPreparationFailed();
     /**
      * @dev Emitted when a position state changes
      */

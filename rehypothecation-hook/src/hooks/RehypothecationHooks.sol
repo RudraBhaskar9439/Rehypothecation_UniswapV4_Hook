@@ -1,16 +1,16 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import {BaseHook} from "v4-periphery/src/utils/BaseHook.sol";
-import {Hooks} from "v4-core/libraries/Hooks.sol";
-import {IPoolManager} from "v4-core/interfaces/IPoolManager.sol";
-import {PoolKey} from "v4-core/types/PoolKey.sol";
-import {PoolId, PoolIdLibrary} from "v4-core/types/PoolId.sol";
-import {BalanceDelta} from "v4-core/types/BalanceDelta.sol";
-import {BeforeSwapDelta, BeforeSwapDeltaLibrary} from "v4-core/types/BeforeSwapDelta.sol";
-import {Currency, CurrencyLibrary} from "v4-core/types/Currency.sol";
-import {SafeCast} from "v4-core/libraries/SafeCast.sol";
-import {SwapParams} from "v4-core/types/PoolOperation.sol";
+import {BaseHook} from "../../lib/v4-periphery/src/utils/BaseHook.sol";
+import {Hooks} from "../../lib/v4-core/src/libraries/Hooks.sol";
+import {IPoolManager} from "../../lib/v4-core/src/interfaces/IPoolManager.sol";
+import {PoolKey} from "../../lib/v4-core/src/types/PoolKey.sol";
+import {PoolId, PoolIdLibrary} from "../../lib/v4-core/src/types/PoolId.sol";
+import {BalanceDelta} from "../../lib/v4-core/src/types/BalanceDelta.sol";
+import {BeforeSwapDelta, BeforeSwapDeltaLibrary} from "../../lib/v4-core/src/types/BeforeSwapDelta.sol";
+import {Currency, CurrencyLibrary} from "../../lib/v4-core/src/types/Currency.sol";
+import {SafeCast} from "../../lib/v4-core/src/libraries/SafeCast.sol";
+import {ModifyLiquidityParams, SwapParams} from "../../v4-core/src/types/PoolOperation.sol";
 
 import {LiquidityOrchestrator} from "../LiquidityOrchestrator.sol";
 import {IAave} from "../interfaces/IAave.sol";
@@ -19,8 +19,9 @@ import {Constant} from "../utils/Constant.sol";
 import {LiquidityOrchestrator} from "../LiquidityOrchestrator.sol";
 
 import {ILiquidityOrchestrator} from "../interfaces/ILiquidityOrchestrator.sol";
+import {IRehypothecationHook} from "../interfaces/IRehypothecationHook.sol";
 
-contract RehypothecationHooks is BaseHook, ILiquidityOrchestrator {
+contract RehypothecationHooks is BaseHook, ILiquidityOrchestrator, IRehypothecationHook {
     using PoolIdLibrary for PoolKey;
     using SafeCast for uint256;
     using CurrencyLibrary for Currency;
@@ -43,6 +44,14 @@ contract RehypothecationHooks is BaseHook, ILiquidityOrchestrator {
     modifier onlyOwner() {
         require(msg.sender == owner, " Only Owner");
         _;
+    }
+
+    function _generatePositionKey(PoolKey calldata key, address positionOwner)
+        internal
+        pure
+        returns (bytes32)
+    {
+        return keccak256(abi.encode(PoolId.unwrap(key.toId()), positionOwner));
     }
 
     /**
@@ -99,10 +108,10 @@ contract RehypothecationHooks is BaseHook, ILiquidityOrchestrator {
         BalanceDelta delta,
         BalanceDelta feesAccrued,
         bytes calldata hookData
-    ) internal override {
+    ) internal override returns (bytes4 selector, BalanceDelta outDelta) {
         // Generate position key from pool key and sender
         bytes32 positionKey = _generatePositionKey(key, sender);
-        (, int24 currentTick,,) = poolManager.getSlot0(key.toId());
+        (, int24 currentTick,,) = StateLibrary.getSlot0(poolManager, key.toId());
 
         uint256 amount0In = delta.amount0() < 0 ? uint256(int256(-delta.amount0())) : 0;
         uint256 amount1In = delta.amount1() < 0 ? uint256(int256(-delta.amount1())) : 0;
@@ -123,7 +132,7 @@ contract RehypothecationHooks is BaseHook, ILiquidityOrchestrator {
         }
         uint256 totalLiquidity = amount0In + amount1In;
 
-        PositionData memory data = PositionData({
+        ILiquidityOrchestrator.PositionData memory data = ILiquidityOrchestrator.PositionData({
             owner: sender,
             tickLower: params.tickLower,
             tickUpper: params.tickUpper,
@@ -134,7 +143,7 @@ contract RehypothecationHooks is BaseHook, ILiquidityOrchestrator {
             aaveAmount0: 0,
             aaveAmount1: 0,
             exists: true,
-            state: PositionState.IN_RANGE
+            state: ILiquidityOrchestrator.PositionState.IN_RANGE
         });
 
         // This will create a new position.
@@ -159,7 +168,7 @@ contract RehypothecationHooks is BaseHook, ILiquidityOrchestrator {
     ) internal override returns (bytes4 selector) {
         // Generate position key from pool key and sender
         bytes32 positionKey = _generatePositionKey(key, sender);
-        (, int24 currentTick,,) = poolManager.getSlot0(key.toId());
+        (, int24 currentTick,,) = StateLibrary.getSlot0(poolManager, key.toId());
 
         address asset0 = Currency.unwrap(key.currency0);
         address asset1 = Currency.unwrap(key.currency1);
@@ -180,15 +189,15 @@ contract RehypothecationHooks is BaseHook, ILiquidityOrchestrator {
         BalanceDelta delta,
         BalanceDelta feeAccured,
         bytes calldata hookData
-    ) internal override returns (bytes4 selector) {
+    ) internal override returns (bytes4 selector, BalanceDelta outDelta) {
         // Generate position key from pool key and sender
         bytes32 positionKey = _generatePositionKey(key,sender);
-        (,int24 currentTick , , ) = poolManager.getSlot0(key.toId());
+        (,int24 currentTick , , ) = StateLibrary.getSlot0(poolManager, key.toId());
 
         // Calculate the amount to be withdrawn 
         // WHen liq is removed , delta is +ve (tokens returned to user)
-        uint256 liqAmount0 = delta.amount0 > 0 ? uint256(int256(delta.amount0())) : 0;
-        uint256 liqAmount1 = delta.amount1 > 0 ? uint256(int256(delta.amount1())) : 0;
+        uint256 liqAmount0 = delta.amount0() > 0 ? uint256(int256(delta.amount0())) : 0;
+        uint256 liqAmount1 = delta.amount1() > 0 ? uint256(int256(delta.amount1())) : 0;
 
         address asset0 = Currency.unwrap(key.currency0);
         address asset1 = Currency.unwrap(key.currency1);
@@ -200,7 +209,7 @@ contract RehypothecationHooks is BaseHook, ILiquidityOrchestrator {
             revert PostWithdrawalRebalanceFailed();
         }
         
-        return this.afterRemoveLiquidity.selector;
+        return (this.afterRemoveLiquidity.selector, delta);
     }
 
     /**
@@ -219,7 +228,7 @@ contract RehypothecationHooks is BaseHook, ILiquidityOrchestrator {
         bytes calldata hookData // Extra data passed to the hook by the swpa caller
     ) internal override returns (bytes4 selector, BeforeSwapDelta beforeSwapDelta, uint24 fee) {
         // Fetching current tick from pool manager
-        (, int24 currentTick,,) = poolManager.getSlot0(key.toId());
+        (, int24 currentTick,,) = StateLibrary.getSlot0(poolManager, key.toId());
 
         // Generate position key from pool key and sender
         bytes32 positionKey = _generatePositionKey(key, sender);
@@ -240,19 +249,22 @@ contract RehypothecationHooks is BaseHook, ILiquidityOrchestrator {
     function _afterSwap(
         address sender,
         PoolKey calldata key,
-        IPoolManager.SwapParams calldata params,
+        SwapParams calldata params,
         BalanceDelta delta,
         bytes calldata hookData
-    ) external override returns (bytes4 selector, int128 fee) {
+    ) internal override returns (bytes4 selector, int128 fee) {
         // Generate position key from pool key and sender
         bytes32 positionKey = _generatePositionKey(key, sender);
 
         // Getting the old tick from LiquidityOrchestrator lastActiveTick
-        int24 oldTick = liquidityOrchestrator.LastActiveTick(positionKey);
+        int24 oldTick = liquidityOrchestrator.lastActiveTick(positionKey);
 
-        (, int24 newTick,,) = poolManager.getSlot0(key.toId());
+        (, int24 newTick,,) = StateLibrary.getSlot0(poolManager, key.toId());
 
-        bool success = liquidityOrchestrator.executePostSwapManagement(positionKey, oldTick, newTick);
+        address token0 = Currency.unwrap(key.currency0);
+        address token1 = Currency.unwrap(key.currency1);
+
+        bool success = liquidityOrchestrator.executePostSwapManagement(positionKey, oldTick, newTick, token0, token1);
 
         return (BaseHook.afterSwap.selector, 0);
     }

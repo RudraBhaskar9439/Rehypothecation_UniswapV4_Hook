@@ -146,11 +146,18 @@ abstract contract LiquidityOrchestrator is ILiquidityOrchestrator {
         address asset1
     ) external returns (bool success) {
         if (!checkPostSwapLiquidityNeeds(positionKey, oldTick, newTick)) {
+        // Even if no liquidity management is required, still the record of last Active tick
+        // If the position exists and was in range
+        PositionData storage p = positions[positionKey];
+        if(p.exists && (oldTick >= p.tickLower  && oldTick <= p.tickUpper)) {
+            lastActiveTick[positionKey] = oldTick; // Remember last active tick
+
+            }
             return true;
         }
 
-        PositionData storage p = positions[positionKey];
-        lastActiveTick[positionKey] = oldTick; // Remember last active tick
+        
+        
 
         // Calculate amounts to deposit (keep reserve buffer)
 
@@ -160,6 +167,7 @@ abstract contract LiquidityOrchestrator is ILiquidityOrchestrator {
         uint256 depositAmount1 = (p.reserveAmount1 * (100 - reservePCT)) / 100;
 
         if (depositAmount0 == 0 && depositAmount1 == 0) {
+            lastActiveTick[positionKey] = newTick;  // Update the last active tick even if there is nothing ot deposit
             return true; // Nothing to deposit
         }
 
@@ -182,6 +190,8 @@ abstract contract LiquidityOrchestrator is ILiquidityOrchestrator {
         } catch {
             // Deposit failed - keep liquidity in Uniswap for now
             emit DepositFailed(positionKey, "Token0 or Token1 deposit failed");
+            // Even if the deposit failed, the liquidity is still conceptually in rage for now, so lastActiveTick should reflect the newTick where it got stuck.
+            lastActiveTick[positionKey] = newTick;
             return false;
         }
     }

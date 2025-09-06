@@ -8,9 +8,9 @@ interface IERC20 {
 }
 
 interface ILendingPool {
-    function supply(address asset, uint256 amount, address onBehalfOf, uint16 referralCode) external virtual;
+    function supply(address asset, uint256 amount, address onBehalfOf, uint16 referralCode) external;
 
-    function withdraw(address asset, uint256 amount, address to) external virtual override returns (uint256);
+    function withdraw(address asset, uint256 amount, address to) external returns (uint256);
 }
 
 abstract contract Aave is IAave {
