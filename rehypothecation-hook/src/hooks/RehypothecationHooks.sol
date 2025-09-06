@@ -171,7 +171,7 @@ contract RehypothecationHooks is BaseHook, ILiquidityOrchestrator {
         address asset0 = Currency.unwrap(key.currency0);
         address asset1 = Currency.unwrap(key.currency1);
 
-        bool success = liquidityOrchestrator.preparePreSwapLiquidity(positionKey, currentTick, asset0, asset1);
+        bool success = liquidityOrchestrator.preparePositionForWithdrawal(positionKey, asset0, asset1);
 
         if (!success) {
             revert LiquidityRemovalFailed();

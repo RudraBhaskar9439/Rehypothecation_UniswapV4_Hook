@@ -33,7 +33,7 @@ abstract contract LiquidityOrchestrator is ILiquidityOrchestrator {
     }
 
     event HandlingRebalanceFailure(bytes32 positionKey, bool success);
-    event PositionUpserted(bytes32 positionKey, address owner);
+    event PositionUpserted(bytes32 positionKey);
     event PositionResumed(bytes32 positionKey);
     event StuckPositionRecovered(bytes32 positionKey);
     event PreSwapLiquidityPrepared(bytes32 positionKey, uint256 amount);
@@ -57,8 +57,8 @@ abstract contract LiquidityOrchestrator is ILiquidityOrchestrator {
         returns (bool needsWithdrawal)
     {
         PositionData storage p = positions[positionKey];
-        if (!p.exists || p.totalLiquidity < Constant.MIN_POSITION_SIZE) {
-            return false;
+        if (!p.exists) {
+            revert PositionNotFound();
         }
 
         // Check if position is currently in range (swap will use this liquidity)
@@ -66,7 +66,7 @@ abstract contract LiquidityOrchestrator is ILiquidityOrchestrator {
         bool currentlyInRange = (currentTick >= p.tickLower && currentTick <= p.tickUpper);
 
         // Need withdrawal if: position is currently active BUT liquidity is stuck in Aave
-        return currentlyInRange && p.state == PositionState.IN_AAVE;
+        return currentlyInRange && (p.state == PositionState.IN_AAVE || p.state == PositionState.AAVE_STUCK);
     }
 
     /**
@@ -82,7 +82,7 @@ abstract contract LiquidityOrchestrator is ILiquidityOrchestrator {
         returns (bool needsDeposit)
     {
         PositionData storage p = positions[positionKey];
-        if (!p.exists || p.totalLiquidity < Constant.MIN_POSITION_SIZE) {
+        if (!p.exists) {
             return false;
         }
 
@@ -105,8 +105,7 @@ abstract contract LiquidityOrchestrator is ILiquidityOrchestrator {
         returns (bool success)
     {
         if (!checkPreSwapLiquidityNeeds(positionKey, currentTick)) {
-            PositionData memory p = positions[positionKey];
-            return true;
+            return true;  // Already in uniswap
         }
 
         PositionData storage p = positions[positionKey];
@@ -117,6 +116,7 @@ abstract contract LiquidityOrchestrator is ILiquidityOrchestrator {
                 p.aaveAmount1 = 0;
                 emit PreSwapLiquidityPrepared(positionKey, withdrawnAmount1);
             } catch {
+                p.state = PositionState.AAVE_STUCK;
                 emit WithdrawalFailed(positionKey, "Token1 withdrawal failed");
                 return false;
             }
@@ -232,6 +232,7 @@ abstract contract LiquidityOrchestrator is ILiquidityOrchestrator {
                 emit PreparePositionForWithdrawed(positionKey, withdrawnAmount0);
                 return true;
             } catch {
+                p.state = PositionState.AAVE_STUCK;
                 emit PreparePositionForWithdrawalFailed(positionKey, "Token0 withdrawal failed");
                 return false;
             }
@@ -445,7 +446,7 @@ abstract contract LiquidityOrchestrator is ILiquidityOrchestrator {
     // Position management functions
     function upsertPosition(bytes32 positionKey, PositionData calldata data) external override {
         positions[positionKey] = data;
-        emit PositionUpserted(positionKey, data.owner);
+        emit PositionUpserted(positionKey);
     }
 
     function getPosition(bytes32 positionKey) external view returns (PositionData memory) {
