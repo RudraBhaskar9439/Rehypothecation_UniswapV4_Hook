@@ -105,7 +105,7 @@ abstract contract LiquidityOrchestrator is ILiquidityOrchestrator {
         returns (bool success)
     {
         if (!checkPreSwapLiquidityNeeds(positionKey, currentTick)) {
-            return true;  // Already in uniswap
+            return true; // Already in uniswap
         }
 
         PositionData storage p = positions[positionKey];
@@ -146,22 +146,19 @@ abstract contract LiquidityOrchestrator is ILiquidityOrchestrator {
         address asset1
     ) external returns (bool success) {
         if (!checkPostSwapLiquidityNeeds(positionKey, oldTick, newTick)) {
-        // Even if no liquidity management is required, still the record of last Active tick
-        // If the position exists and was in range
-        PositionData storage p = positions[positionKey];
-        // if (p.exists) {
-        //     lastActiveTick[positionKey] = newTick;
-        // } 
+            // Even if no liquidity management is required, still the record of last Active tick
+            // If the position exists and was in range
+            PositionData storage p = positions[positionKey];
+            // if (p.exists) {
+            //     lastActiveTick[positionKey] = newTick;
+            // }
 
-            }
             return true;
         }
 
-        
-        
+        PositionData storage p = positions[positionKey];
 
-        // Calculate amounts to deposit (keep reserve buffer)
-
+        // Calculate amounts to deposit based on reservePct
         uint8 reservePCT = p.reservePct == 0 ? Constant.DEFAULT_RESERVE_PCT : p.reservePct;
 
         uint256 depositAmount0 = (p.reserveAmount0 * (100 - reservePCT)) / 100;
