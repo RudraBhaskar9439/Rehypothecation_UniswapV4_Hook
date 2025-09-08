@@ -38,13 +38,17 @@ interface ILiquidityOrchestrator {
         view
         returns (bool needsDeposit);
 
-    function preparePreSwapLiquidity(bytes32 positionKey, int24 currentTick)
-        external
-        returns (bool success, uint256 availableAmount0, uint256 availableAmount1);
-
-    function executePostSwapManagement(bytes32 positionKey, int24 oldTick, int24 newTick)
-        external
-        returns (bool success);
+    // function preparePreSwapLiquidity(bytes32 positionKey, int24 currentTick)
+    //     external
+    //     returns (bool success, uint256 availableAmount0, uint256 availableAmount1);
+    function preparePreSwapLiquidity(bytes32 positionKey, int24 currentTick, address asset0, address asset1)
+            external
+           returns (bool success);
+    // function executePostSwapManagement(bytes32 positionKey, int24 oldTick, int24 newTick)
+    //     external
+    //     returns (bool success);
+    function executePostSwapManagement(bytes32 positionKey, int24 oldTick, int24 newTick,address asset0,address asset1)
+    external returns (bool success);
 
     function upsertPosition(bytes32 positionKey, PositionData calldata data) external;
 
