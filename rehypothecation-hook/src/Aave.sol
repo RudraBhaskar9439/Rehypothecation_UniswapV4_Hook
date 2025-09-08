@@ -13,7 +13,7 @@ interface ILendingPool {
     function withdraw(address asset, uint256 amount, address to) external virtual override returns (uint256);
 }
 
-abstract contract Aave is IAave {
+contract Aave is IAave {
     ILendingPool public aave;
 
     error InvalidInput();
