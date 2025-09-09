@@ -2,6 +2,7 @@
 pragma solidity ^0.8.26;
 
 import {Test} from "forge-std/Test.sol";
+import {console} from "forge-std/console.sol";
 import {Deployers} from "@uniswap/v4-core/test/utils/Deployers.sol";
 import {PoolSwapTest} from "v4-core/test/PoolSwapTest.sol";
 import {MockERC20} from "solmate/src/test/utils/mocks/MockERC20.sol";
@@ -101,13 +102,17 @@ contract RehypothecationHooksTest is Test, Deployers, ERC1155TokenReceiver {
             Hooks.BEFORE_SWAP_FLAG | Hooks.AFTER_SWAP_FLAG | Hooks.BEFORE_REMOVE_LIQUIDITY_FLAG
                 | Hooks.AFTER_REMOVE_LIQUIDITY_FLAG | Hooks.AFTER_ADD_LIQUIDITY_FLAG
         );
+        address hookAddress = address(flags);
 
         // Get hook deployment bytecode
-        bytes memory hookBytecode =
-            abi.encodePacked(type(RehypothecationHooks).creationCode, abi.encode(manager, aaveContract, orchestrator));
+        deployCodeTo("RehypothecationHooks.sol", abi.encode(manager, aaveContract, orchestrator), hookAddress);
 
         // Deploy the hook to a deterministic address with the hook flags
-        hook = RehypothecationHooks(deployCode("RehypothecationHooks.sol", hookBytecode, flags));
+        hook = RehypothecationHooks(hookAddress);
+
+        // Approve tokens for routers
+        token0.approve(address(manager), type(uint256).max);
+        token1.approve(address(manager), type(uint256).max);
 
         // Approve tokens for routers
         token0.approve(address(modifyLiquidityRouter), type(uint256).max);
@@ -115,52 +120,63 @@ contract RehypothecationHooksTest is Test, Deployers, ERC1155TokenReceiver {
         token1.approve(address(modifyLiquidityRouter), type(uint256).max);
         token1.approve(address(swapRouter), type(uint256).max);
 
-        // Initialize pool
-        poolKey = PoolKey({currency0: currency0, currency1: currency1, fee: 3000, tickSpacing: 60, hooks: hook});
+        // Approve tokens for the orchestrator (needed for Aave deposits)
+        token0.approve(address(orchestrator), type(uint256).max);
+        token1.approve(address(orchestrator), type(uint256).max);
 
-        manager.initialize(poolKey, SQRT_PRICE_1_1);
+        // Also approve the Aave contract
+        token0.approve(address(aaveContract), type(uint256).max);
+        token1.approve(address(aaveContract), type(uint256).max);
+
+        (key,) = initPool(currency0, currency1, hook, 3000, SQRT_PRICE_1_1);
+        poolKey = key;
     }
 
-    // function test_AddLiquidity() public {
-    //     // Add liquidity to the pool
-    //     int24 tickLower = -60;
-    //     int24 tickUpper = 60;
+    function test_AddLiquidity() public {
+        // Add liquidity to the pool
+        int24 tickLower = -60;
+        int24 tickUpper = 60;
 
-    //     uint256 amount0Desired = 1 ether;
-    //     uint256 amount1Desired = 1 ether;
+        uint256 amount0Desired = 1 ether;
+        uint256 amount1Desired = 1 ether;
 
-    //     uint160 sqrtPriceLower = TickMath.getSqrtPriceAtTick(tickLower);
-    //     uint160 sqrtPriceUpper = TickMath.getSqrtPriceAtTick(tickUpper);
+        uint160 sqrtPriceLower = TickMath.getSqrtPriceAtTick(tickLower);
+        uint160 sqrtPriceUpper = TickMath.getSqrtPriceAtTick(tickUpper);
 
-    //     uint128 liquidity = LiquidityAmounts.getLiquidityForAmounts(
-    //         SQRT_PRICE_1_1, sqrtPriceLower, sqrtPriceUpper, amount0Desired, amount1Desired
-    //     );
+        uint128 liquidity = LiquidityAmounts.getLiquidityForAmounts(
+            SQRT_PRICE_1_1, sqrtPriceLower, sqrtPriceUpper, amount0Desired, amount1Desired
+        );
 
-    //     ModifyLiquidityParams memory params = ModifyLiquidityParams({
-    //         tickLower: tickLower,
-    //         tickUpper: tickUpper,
-    //         liquidityDelta: int256(uint256(liquidity)),
-    //         salt: bytes32(0)
-    //     });
+        bytes memory hookData = abi.encode(tickLower, tickUpper);
 
-    //     // Call modifyLiquidity - this will trigger the afterAddLiquidity hook
-    //     BalanceDelta delta = modifyLiquidityRouter.modifyLiquidity(poolKey, params, "");
+        // Call modifyLiquidity - this will trigger the afterAddLiquidity hook
+        modifyLiquidityRouter.modifyLiquidity(
+            poolKey,
+            ModifyLiquidityParams({
+                tickLower: tickLower,
+                tickUpper: tickUpper,
+                liquidityDelta: int256(uint256(liquidity)),
+                salt: bytes32(0)
+            }),
+            hookData
+        );
+        console.log("Added liquidity");
 
-    //     // Generate position key to check
-    //     bytes32 positionKey = keccak256(abi.encode(poolKey.toId(), address(this)));
+        // Generate position key to check
+        bytes32 positionKey = keccak256(abi.encodePacked(poolKey.toId(), tickLower, tickUpper));
 
-    //     // Check if position exists in orchestrator
-    //     assertTrue(orchestrator.isPositionExists(positionKey), "Position not created");
+        // Check if position exists in orchestrator
+        assertTrue(orchestrator.isPositionExists(positionKey), "Position not created");
 
-    //     // Get position data
-    //     ILiquidityOrchestrator.PositionData memory position = orchestrator.getPosition(positionKey);
+        // Get position data
+        ILiquidityOrchestrator.PositionData memory position = orchestrator.getPosition(positionKey);
 
-    //     // Check position data
-    //     assertTrue(position.exists, "Position should exist");
-    //     assertEq(position.tickLower, tickLower, "Incorrect lower tick");
-    //     assertEq(position.tickUpper, tickUpper, "Incorrect upper tick");
-    //     assertEq(position.reservePct, Constant.DEFAULT_RESERVE_PCT, "Incorrect reserve percentage");
-    // }
+        // Check position data
+        assertTrue(position.exists, "Position should exist");
+        assertEq(position.tickLower, tickLower, "Incorrect lower tick");
+        assertEq(position.tickUpper, tickUpper, "Incorrect upper tick");
+        assertEq(position.reservePct, Constant.DEFAULT_RESERVE_PCT, "Incorrect reserve percentage");
+    }
 
     // function test_Swap() public {
     //     // First add liquidity
