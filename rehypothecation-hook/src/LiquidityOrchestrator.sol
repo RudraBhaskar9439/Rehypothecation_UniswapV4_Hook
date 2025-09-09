@@ -145,32 +145,37 @@ contract LiquidityOrchestrator is ILiquidityOrchestrator {
             return true; // Nothing to deposit
         }
 
-        try Aave.deposit(asset0, depositAmount0, address(this), 0) {
-            try Aave.deposit(asset1, depositAmount1, address(this), 0) {
-                p.reserveAmount1 -= depositAmount1;
-                p.aaveAmount1 += depositAmount1;
+        bool depositSuccess = false;
 
-                emit PostSwapLiquidityDeposited(positionKey, depositAmount1);
+        if (amount0ToDeposit > 0) {
+            try Aave.deposit(asset0, amount0ToDeposit, address(this), 0) {
+                p.reserveAmount0 -= amount0ToDeposit;
+                p.aaveAmount0 += amount0ToDeposit;
+                depositSuccess = true;
+                emit PostAddLiquidityDeposited(positionKey, amount0ToDeposit);
+            } catch {
+                emit DepositFailed(positionKey, "Token0 deposit failed");
+                depositSuccess = false;
+            }
+        }
+
+        if (amount1ToDeposit > 0) {
+            try Aave.deposit(asset1, amount1ToDeposit, address(this), 0) {
+                p.reserveAmount1 -= amount1ToDeposit;
+                p.aaveAmount1 += amount1ToDeposit;
+                depositSuccess = true;
+                emit PostWithdrawalLiquidityDeposited(positionKey, amount1ToDeposit);
             } catch {
                 emit DepositFailed(positionKey, "Token1 deposit failed");
-                return false;
+                depositSuccess = false;
             }
-            p.reserveAmount0 -= depositAmount0;
-            p.aaveAmount0 += depositAmount0;
-            p.state = PositionState.IN_AAVE;
-
-            emit PostSwapLiquidityDeposited(positionKey, depositAmount0);
-            return true;
-        } catch {
-            // Deposit failed - keep liquidity in Uniswap for now
-            // emit DepositFailed(positionKey, "Token0 or Token1 deposit failed");
-            // Even if the deposit failed, the liquidity is still conceptually in rage for now, so lastActiveTick should reflect the newTick where it got stuck.
-            // lastActiveTick[positionKey] = newTick;
-
-            // Deposit failed - keep liquidity in Uniswap for now
-            emit DepositFailed(positionKey, "Token0 deposit failed");
-            return false;
         }
+
+        if (depositSuccess && (amount0ToDeposit > 0 || amount1ToDeposit > 0)) {
+            p.state = PositionState.IN_AAVE;
+        }
+
+        return depositSuccess;
     }
 
     /**
@@ -253,25 +258,37 @@ contract LiquidityOrchestrator is ILiquidityOrchestrator {
                 return true; // Nothing to deposit is there
             }
 
-            try Aave.deposit(asset0, amount0ToDeposit, address(this), 0) {
+            bool depositSuccess = false;
+
+            if (amount0ToDeposit > 0) {
+                try Aave.deposit(asset0, amount0ToDeposit, address(this), 0) {
+                    p.reserveAmount0 -= amount0ToDeposit;
+                    p.aaveAmount0 += amount0ToDeposit;
+                    depositSuccess = true;
+                    emit PostAddLiquidityDeposited(positionKey, amount0ToDeposit);
+                } catch {
+                    emit DepositFailed(positionKey, "Token0 deposit failed");
+                    depositSuccess = false;
+                }
+            }
+
+            if (amount1ToDeposit > 0) {
                 try Aave.deposit(asset1, amount1ToDeposit, address(this), 0) {
+                    p.reserveAmount1 -= amount1ToDeposit;
+                    p.aaveAmount1 += amount1ToDeposit;
+                    depositSuccess = true;
                     emit PostWithdrawalLiquidityDeposited(positionKey, amount1ToDeposit);
                 } catch {
                     emit DepositFailed(positionKey, "Token1 deposit failed");
-                    return false;
+                    depositSuccess = false;
                 }
-                p.reserveAmount0 -= amount0ToDeposit;
-                p.reserveAmount1 -= amount1ToDeposit;
-                p.aaveAmount0 += amount0ToDeposit;
-                p.aaveAmount1 += amount1ToDeposit;
-                p.state = PositionState.IN_AAVE;
-
-                emit PostWithdrawalLiquidityDeposited(positionKey, amount0ToDeposit);
-                return true;
-            } catch {
-                emit DepositFailed(positionKey, "Token0 or Token1 deposit failed");
-                return false;
             }
+
+            if (depositSuccess && (amount0ToDeposit > 0 || amount1ToDeposit > 0)) {
+                p.state = PositionState.IN_AAVE;
+            }
+
+            return depositSuccess;
         }
     }
 
@@ -308,25 +325,37 @@ contract LiquidityOrchestrator is ILiquidityOrchestrator {
                 return true; // Nothing to deposit is there
             }
 
-            try Aave.deposit(asset0, amount0ToDeposit, address(this), 0) {
+            bool depositSuccess = false;
+
+            if (amount0ToDeposit > 0) {
+                try Aave.deposit(asset0, amount0ToDeposit, address(this), 0) {
+                    p.reserveAmount0 -= amount0ToDeposit;
+                    p.aaveAmount0 += amount0ToDeposit;
+                    depositSuccess = true;
+                    emit PostAddLiquidityDeposited(positionKey, amount0ToDeposit);
+                } catch {
+                    emit DepositFailed(positionKey, "Token0 deposit failed");
+                    depositSuccess = false;
+                }
+            }
+
+            if (amount1ToDeposit > 0) {
                 try Aave.deposit(asset1, amount1ToDeposit, address(this), 0) {
+                    p.reserveAmount1 -= amount1ToDeposit;
+                    p.aaveAmount1 += amount1ToDeposit;
+                    depositSuccess = true;
                     emit PostWithdrawalLiquidityDeposited(positionKey, amount1ToDeposit);
                 } catch {
                     emit DepositFailed(positionKey, "Token1 deposit failed");
-                    return false;
+                    depositSuccess = false;
                 }
-                p.reserveAmount0 -= amount0ToDeposit;
-                p.reserveAmount1 -= amount1ToDeposit;
-                p.aaveAmount0 += amount0ToDeposit;
-                p.aaveAmount1 += amount1ToDeposit;
-                p.state = PositionState.IN_AAVE;
-
-                emit PostAddLiquidityDeposited(positionKey, amount0ToDeposit);
-                return true;
-            } catch {
-                emit DepositFailed(positionKey, "Token0 or Token1 deposit failed");
-                return false;
             }
+
+            if (depositSuccess && (amount0ToDeposit > 0 || amount1ToDeposit > 0)) {
+                p.state = PositionState.IN_AAVE;
+            }
+
+            return depositSuccess;
         } else {
             p.state = PositionState.IN_RANGE;
             return true;

@@ -10,6 +10,7 @@ import {MockERC20} from "solmate/src/test/utils/mocks/MockERC20.sol";
 import {PoolManager} from "v4-core/PoolManager.sol";
 import {SwapParams, ModifyLiquidityParams} from "v4-core/types/PoolOperation.sol";
 import {IPoolManager} from "v4-core/interfaces/IPoolManager.sol";
+import {StateLibrary} from "v4-core/libraries/StateLibrary.sol";
 
 import {Currency, CurrencyLibrary} from "v4-core/types/Currency.sol";
 import {PoolKey} from "v4-core/types/PoolKey.sol";
@@ -50,6 +51,7 @@ contract MockLendingPool {
 contract RehypothecationHooksTest is Test, Deployers, ERC1155TokenReceiver {
     using PoolIdLibrary for PoolKey;
     using CurrencyLibrary for Currency;
+    using StateLibrary for IPoolManager;
 
     // Contracts
     RehypothecationHooks hook;
@@ -178,6 +180,51 @@ contract RehypothecationHooksTest is Test, Deployers, ERC1155TokenReceiver {
         assertEq(position.reservePct, Constant.DEFAULT_RESERVE_PCT, "Incorrect reserve percentage");
     }
 
+    function test_AddLiquidityOutOfRange() public {
+        // Get current tick
+        (, int24 currentTick,,) = manager.getSlot0(poolKey.toId());
+        console.log("Current tick:", currentTick);
+        // get tick spacing
+
+        // Add liquidity well above current range (out of range)
+        int24 tickLower = currentTick + 120;
+        int24 tickUpper = currentTick + 240;
+
+        uint256 amount0Desired = 1 ether;
+        uint256 amount1Desired = 1 ether;
+
+        uint160 sqrtPriceLower = TickMath.getSqrtPriceAtTick(tickLower);
+        uint160 sqrtPriceUpper = TickMath.getSqrtPriceAtTick(tickUpper);
+
+        uint128 liquidity = LiquidityAmounts.getLiquidityForAmounts(
+            SQRT_PRICE_1_1, sqrtPriceLower, sqrtPriceUpper, amount0Desired, amount1Desired
+        );
+        console.log("Calculated out of range liquidity:", liquidity);
+
+        bytes memory hookData = abi.encode(tickLower, tickUpper);
+
+        // Add out of range liquidity
+        modifyLiquidityRouter.modifyLiquidity(
+            poolKey,
+            ModifyLiquidityParams({
+                tickLower: tickLower,
+                tickUpper: tickUpper,
+                liquidityDelta: int256(uint256(liquidity)),
+                salt: bytes32(0)
+            }),
+            hookData
+        );
+        console.log("Added out of range liquidity");
+
+        // Check if position was created
+        bytes32 positionKey = keccak256(abi.encodePacked(poolKey.toId(), tickLower, tickUpper));
+        assertTrue(orchestrator.isPositionExists(positionKey), "Position not created");
+
+        // Check if liquidity went to Aave
+        ILiquidityOrchestrator.PositionData memory position = orchestrator.getPosition(positionKey);
+        assertTrue(position.state == ILiquidityOrchestrator.PositionState.IN_AAVE, "Position should be in Aave");
+        assertTrue(position.aaveAmount0 > 0 || position.aaveAmount1 > 0, "No liquidity in Aave");
+    }
     // function test_Swap() public {
     //     // First add liquidity
     //     test_AddLiquidity();
