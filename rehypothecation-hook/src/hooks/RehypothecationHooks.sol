@@ -6,7 +6,7 @@ import {Hooks} from "v4-core/libraries/Hooks.sol";
 import {IPoolManager} from "v4-core/interfaces/IPoolManager.sol";
 import {PoolKey} from "v4-core/types/PoolKey.sol";
 import {PoolId, PoolIdLibrary} from "v4-core/types/PoolId.sol";
-import {BalanceDelta} from "v4-core/types/BalanceDelta.sol";
+import {BalanceDelta, BalanceDeltaLibrary} from "v4-core/types/BalanceDelta.sol";
 import {BeforeSwapDelta, BeforeSwapDeltaLibrary} from "v4-core/types/BeforeSwapDelta.sol";
 import {Currency, CurrencyLibrary} from "v4-core/types/Currency.sol";
 import {SafeCast} from "v4-core/libraries/SafeCast.sol";
@@ -94,23 +94,22 @@ contract RehypothecationHooks is BaseHook {
 
     /**
      * @notice  Will perform liquidity management after liquidity is added to a pool, either creating a new position or updating an existing one.
-     * @param   sender  The address adding liquidity
      * @param   key  The pool key
      * @param   params  The parameters for modifying liquidity
      * @param   delta  The change in balance
-     * @param   feesAccrued  The fees accrued
      * @param   hookData  Additional data for the hook
      */
     function _afterAddLiquidity(
-        address sender,
+        address,
         PoolKey calldata key,
         ModifyLiquidityParams calldata params,
         BalanceDelta delta,
-        BalanceDelta feesAccrued,
+        BalanceDelta,
         bytes calldata hookData
     ) internal override returns (bytes4 selector, BalanceDelta returnedDelta) {
         // Generate position key from pool key and sender
         // (, int24 currentTick,,) = ISlot0(address(poolManager)).getSlot0(key.toId());
+        (int24 lowerTick, int24 upperTick) = abi.decode(hookData, (int24, int24));
         (, int24 currentTick,,) = poolManager.getSlot0(key.toId());
 
         bytes32 positionKey = _generatePositionKey(key, params.tickLower, params.tickUpper);
@@ -131,13 +130,13 @@ contract RehypothecationHooks is BaseHook {
                 revert LiquidityAdditionFailed();
             }
 
-            return (this.afterAddLiquidity.selector, delta);
+            return (this.afterAddLiquidity.selector, BalanceDeltaLibrary.ZERO_DELTA);
         }
         uint256 totalLiquidity = amount0In + amount1In;
 
         ILiquidityOrchestrator.PositionData memory data = ILiquidityOrchestrator.PositionData({
-            tickLower: params.tickLower,
-            tickUpper: params.tickUpper,
+            tickLower: lowerTick,
+            tickUpper: upperTick,
             totalLiquidity: totalLiquidity,
             reservePct: Constant.DEFAULT_RESERVE_PCT,
             reserveAmount0: amount0In,
@@ -159,18 +158,17 @@ contract RehypothecationHooks is BaseHook {
             revert LiquidityAdditionFailed();
         }
 
-        return (this.afterAddLiquidity.selector, delta);
+        return (this.afterAddLiquidity.selector, BalanceDeltaLibrary.ZERO_DELTA);
     }
 
     function _beforeRemoveLiquidity(
-        address sender,
+        address,
         PoolKey calldata key,
         ModifyLiquidityParams calldata params,
-        bytes calldata hookData
+        bytes calldata
     ) internal override returns (bytes4 selector) {
         // Generate position key from pool key and sender
         bytes32 positionKey = _generatePositionKey(key, params.tickLower, params.tickUpper);
-        (, int24 currentTick,,) = poolManager.getSlot0(key.toId());
 
         address asset0 = Currency.unwrap(key.currency0);
         address asset1 = Currency.unwrap(key.currency1);
@@ -185,12 +183,12 @@ contract RehypothecationHooks is BaseHook {
     }
 
     function _afterRemoveLiquidity(
-        address sender,
+        address,
         PoolKey calldata key,
         ModifyLiquidityParams calldata params,
         BalanceDelta delta,
-        BalanceDelta feeAccured,
-        bytes calldata hookData
+        BalanceDelta,
+        bytes calldata
     ) internal override returns (bytes4, BalanceDelta) {
         // Generate position key from pool key and sender
 
@@ -221,16 +219,15 @@ contract RehypothecationHooks is BaseHook {
     /**
      * @dev Hook called before a swap to ensure sufficient liquidity.
      * @param key => The pool key
-     * @param params => Swap parameters
      * @param hookData => Additional data passed to the hook
      * @return selector => Function selecrotor to continue execution
      * @return beforeSwapDelta => The delta to apply befoe swap
      * @return fee => The fee to apply
      */
     function _beforeSwap(
-        address sender, // Address calling the swap
+        address, // Address calling the swap
         PoolKey calldata key, // PoolKey which identifies the specific pool
-        SwapParams calldata params,
+        SwapParams calldata,
         bytes calldata hookData // Extra data passed to the hook by the swpa caller
     ) internal override returns (bytes4 selector, BeforeSwapDelta beforeSwapDelta, uint24 fee) {
         // Fetching current tick from pool manager
@@ -238,7 +235,6 @@ contract RehypothecationHooks is BaseHook {
 
         (int24 lowerTick, int24 upperTick) = abi.decode(hookData, (int24, int24));
         bytes32 positionKey = _generatePositionKey(key, lowerTick, upperTick);
-        ILiquidityOrchestrator.PositionData memory p = liquidityOrchestrator.getPosition(positionKey);
 
         address token0 = Currency.unwrap(key.currency0);
         address token1 = Currency.unwrap(key.currency1);
@@ -261,7 +257,7 @@ contract RehypothecationHooks is BaseHook {
     }
 
     function _afterSwap(
-        address sender,
+        address,
         PoolKey calldata key,
         SwapParams calldata params,
         BalanceDelta delta,
