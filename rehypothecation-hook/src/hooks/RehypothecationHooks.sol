@@ -110,8 +110,10 @@ contract RehypothecationHooks is BaseHook, ILiquidityOrchestrator {
         bytes calldata hookData
     ) internal override returns (bytes4 selector, BalanceDelta returnedDelta) {
         // Generate position key from pool key and sender
-        (, int24 currentTick,,) = ISlot0(address(poolManager)).getSlot0(key.toId());
+        // (, int24 currentTick,,) = ISlot0(address(poolManager)).getSlot0(key.toId());
         (, int24 currentTick,,) = poolManager.getSlot0(key.toId());
+
+        bytes32 positionKey = _generatePositionKey(key, params.tickLower, params.tickUpper);
 
         uint256 amount0In = delta.amount0() < 0 ? uint256(int256(-delta.amount0())) : 0;
         uint256 amount1In = delta.amount1() < 0 ? uint256(int256(-delta.amount1())) : 0;
@@ -147,8 +149,6 @@ contract RehypothecationHooks is BaseHook, ILiquidityOrchestrator {
 
         // This will create a new position.
         liquidityOrchestrator.upsertPosition(positionKey, data);
-        lastActiveTick = currentTick;
-        // liquidityOrchestrator.setLastActiveTick(positionKey, currentTick);
 
         bool success = liquidityOrchestrator.processLiquidityAdditionDeposit(
             positionKey, currentTick, amount0In, amount1In, asset0, asset1
@@ -168,7 +168,7 @@ contract RehypothecationHooks is BaseHook, ILiquidityOrchestrator {
         bytes calldata hookData
     ) internal override returns (bytes4 selector) {
         // Generate position key from pool key and sender
-        bytes32 positionKey = _generatePositionKey(key, sender);
+        bytes32 positionKey = _generatePositionKey(key, params.tickLower, params.tickUpper);
         (, int24 currentTick,,) = poolManager.getSlot0(key.toId());
 
         address asset0 = Currency.unwrap(key.currency0);
@@ -192,12 +192,13 @@ contract RehypothecationHooks is BaseHook, ILiquidityOrchestrator {
         bytes calldata hookData
     ) internal override returns (bytes4 selector) {
         // Generate position key from pool key and sender
-        bytes32 positionKey = _generatePositionKey(key, sender);
+
+        bytes32 positionKey = _generatePositionKey(key, params.tickLower, params.tickUpper);
         (, int24 currentTick,,) = poolManager.getSlot0(key.toId());
         lastActiveTick = currentTick;
 
         // Calculate the amount to be withdrawn
-        // WHen liq is removed , delta is +ve (tokens returned to user)
+        // When liq is removed , delta is +ve (tokens returned to user)
         uint256 liqAmount0 = delta.amount0 > 0 ? uint256(int256(delta.amount0())) : 0;
         uint256 liqAmount1 = delta.amount1 > 0 ? uint256(int256(delta.amount1())) : 0;
 
@@ -234,13 +235,9 @@ contract RehypothecationHooks is BaseHook, ILiquidityOrchestrator {
         // Fetching current tick from pool manager
         (, int24 currentTick,,) = poolManager.getSlot0(key.toId());
 
-        bytes32 positionKey = _generatePositionKey(key, sender);
+        (int24 lowerTick, int24 upperTick) = abi.decode(hookData, (int24, int24));
+        bytes32 positionKey = _generatePositionKey(key, lowerTick, upperTick);
         PositionData memory p = liquidityOrchestrator.getPosition(positionKey);
-        int24 lowerTick = p.tickLower;
-        int24 upperTick = p.tickUpper;
-
-        // (int24 upperTick, int24 lowerTick) = abi.decode(hookData, (int24, int24));
-        lastActiveTick = currentTick;
 
         address token0 = Currency.unwrap(key.currency0);
         address token1 = Currency.unwrap(key.currency1);
@@ -257,6 +254,8 @@ contract RehypothecationHooks is BaseHook, ILiquidityOrchestrator {
             revert PreSwapLiquidityPreparationFailed();
         }
 
+        lastActiveTick = currentTick;
+
         return (BaseHook.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, 0);
     }
 
@@ -267,15 +266,12 @@ contract RehypothecationHooks is BaseHook, ILiquidityOrchestrator {
         BalanceDelta delta,
         bytes calldata hookData
     ) external override returns (bytes4 selector, int128 fee) {
-        // Getting the old tick from LiquidityOrchestrator lastActiveTick
-        // int24 oldTick = liquidityOrchestrator.lastActiveTick(positionKey);
         int24 oldTick = lastActiveTick;
         (, int24 newTick,,) = ISlot0(address(poolManager)).getSlot0(key.toId());
         (, int24 newTick,,) = poolManager.getSlot0(key.toId());
 
-        // (int24 upperTick, int24 lowerTick) = abi.decode(hookData, (int24, int24));
-
-        bytes32 positionKey = _generatePositionKey(key, sender);
+        (int24 lowerTick, int24 upperTick) = abi.decode(hookData, (int24, int24));
+        bytes32 positionKey = _generatePositionKey(key, lowerTick, upperTick);
         PositionData memory p = liquidityOrchestrator.getPosition(positionKey);
 
         if (params.zeroForOne) {
@@ -309,8 +305,11 @@ contract RehypothecationHooks is BaseHook, ILiquidityOrchestrator {
      * @param owner The address of the position owner
      * @return A unique bytes32 position key
      */
-    // function _generatePositionKey(PoolKey calldata key, address positionOwner) internal pure returns (bytes32)
-    // {
-    //     return keccak256(abi.encode(PoolId.unwrap(key.toId()), positionOwner));
-    // }
+    function _generatePositionKey(PoolKey calldata key, int24 lowerTick, int24 upperTick)
+        internal
+        pure
+        returns (bytes32)
+    {
+        return keccak256(abi.encodePacked(key.toId(), lowerTick, upperTick));
+    }
 }

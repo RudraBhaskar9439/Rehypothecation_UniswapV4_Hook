@@ -6,7 +6,7 @@ import {Constant} from "./utils/Constant.sol";
 import {ILiquidityOrchestrator} from "./interfaces/ILiquidityOrchestrator.sol";
 import {IAave} from "./interfaces/IAave.sol";
 
-abstract contract LiquidityOrchestrator is ILiquidityOrchestrator {
+contract LiquidityOrchestrator is ILiquidityOrchestrator {
     IAave public Aave;
 
     error PositionNotFound();
@@ -31,19 +31,6 @@ abstract contract LiquidityOrchestrator is ILiquidityOrchestrator {
         owner = msg.sender;
         Aave = IAave(_aave);
     }
-
-    event HandlingRebalanceFailure(bytes32 positionKey, bool success);
-    event PositionUpserted(bytes32 positionKey);
-    event PositionResumed(bytes32 positionKey);
-    event StuckPositionRecovered(bytes32 positionKey);
-    event PreSwapLiquidityPrepared(bytes32 positionKey, uint256 amount);
-    event PostSwapLiquidityDeposited(bytes32 positionKey, uint256 amount);
-    event DepositFailed(bytes32 positionKey, string reason);
-    event WithdrawalFailed(bytes32 positionKey, string reason);
-    event PreparePositionForWithdrawed(bytes32 positionKey, uint256 amount);
-    event PreparePositionForWithdrawalFailed(bytes32 positionKey, string reason);
-    event PostWithdrawalLiquidityDeposited(bytes32 positionKey, uint256 amount);
-    event PostAddLiquidityDeposited(bytes32 positionKey, uint256 amount);
 
     /**
      * @notice Check if position needs liquidity withdrawal BEFORE swap (current range has liquidity in Aave)
@@ -208,6 +195,7 @@ abstract contract LiquidityOrchestrator is ILiquidityOrchestrator {
             return true;
         }
 
+        // this will only trigger if the state is IN_AAVE or AAVE_STUCK
         if (p.aaveAmount0 >= 0 && p.aaveAmount1 >= 0) {
             try Aave.withdraw(asset0, p.aaveAmount0, address(this)) returns (uint256 withdrawnAmount0) {
                 try Aave.withdraw(asset1, p.aaveAmount1, address(this)) returns (uint256 withdrawnAmount1) {

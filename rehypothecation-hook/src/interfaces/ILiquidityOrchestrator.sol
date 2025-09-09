@@ -43,9 +43,7 @@ interface ILiquidityOrchestrator {
 
     // View Functions
     function owner() external view returns (address);
-    function Aave() external view returns (address);
     function stuckPositions(uint256 index) external view returns (bytes32);
-    function positions(bytes32 positionKey) external view returns (PositionData memory);
 
     /**
      * @notice Check if position needs liquidity withdrawal BEFORE swap (current range has liquidity in Aave)
