@@ -34,20 +34,11 @@ import {Constant} from "../src/utils/Constant.sol";
 contract MockLendingPool {
     mapping(address => mapping(address => uint256)) public deposits;
 
-    function supply(
-        address asset,
-        uint256 amount,
-        address onBehalfOf,
-        uint16 referralCode
-    ) external {
+    function supply(address asset, uint256 amount, address onBehalfOf, uint16 referralCode) external {
         deposits[onBehalfOf][asset] += amount;
     }
 
-    function withdraw(
-        address asset,
-        uint256 amount,
-        address to
-    ) external returns (uint256) {
+    function withdraw(address asset, uint256 amount, address to) external returns (uint256) {
         require(deposits[msg.sender][asset] >= amount, "Not enough balance");
         deposits[msg.sender][asset] -= amount;
         return amount;
@@ -71,8 +62,6 @@ contract RehypothecationHooksTest is Test, Deployers, ERC1155TokenReceiver {
 
     // Pool data
     PoolKey poolKey;
-    Currency currency0;
-    Currency currency1;
 
     function setUp() public {
         // Deploy PoolManager and routers
@@ -108,23 +97,16 @@ contract RehypothecationHooksTest is Test, Deployers, ERC1155TokenReceiver {
 
         // Deploy hook with correct flags
         uint160 flags = uint160(
-            Hooks.BEFORE_SWAP_FLAG |
-                Hooks.AFTER_SWAP_FLAG |
-                Hooks.BEFORE_REMOVE_LIQUIDITY_FLAG |
-                Hooks.AFTER_REMOVE_LIQUIDITY_FLAG |
-                Hooks.AFTER_ADD_LIQUIDITY_FLAG
+            Hooks.BEFORE_SWAP_FLAG | Hooks.AFTER_SWAP_FLAG | Hooks.BEFORE_REMOVE_LIQUIDITY_FLAG
+                | Hooks.AFTER_REMOVE_LIQUIDITY_FLAG | Hooks.AFTER_ADD_LIQUIDITY_FLAG
         );
 
         // Get hook deployment bytecode
-        bytes memory hookBytecode = abi.encodePacked(
-            type(RehypothecationHooks).creationCode,
-            abi.encode(manager, aaveContract, orchestrator)
-        );
+        bytes memory hookBytecode =
+            abi.encodePacked(type(RehypothecationHooks).creationCode, abi.encode(manager, aaveContract, orchestrator));
 
         // Deploy the hook to a deterministic address with the hook flags
-        hook = RehypothecationHooks(
-            deployCode("RehypothecationHooks.sol", hookBytecode, flags)
-        );
+        hook = RehypothecationHooks(deployCode("RehypothecationHooks.sol", hookBytecode, flags));
 
         // Approve tokens for routers
         token0.approve(address(modifyLiquidityRouter), type(uint256).max);
@@ -133,13 +115,7 @@ contract RehypothecationHooksTest is Test, Deployers, ERC1155TokenReceiver {
         token1.approve(address(swapRouter), type(uint256).max);
 
         // Initialize pool
-        poolKey = PoolKey({
-            currency0: currency0,
-            currency1: currency1,
-            fee: 3000,
-            tickSpacing: 60,
-            hooks: hook
-        });
+        poolKey = PoolKey({currency0: currency0, currency1: currency1, fee: 3000, tickSpacing: 60, hooks: hook});
 
         manager.initialize(poolKey, SQRT_PRICE_1_1);
     }
@@ -156,11 +132,7 @@ contract RehypothecationHooksTest is Test, Deployers, ERC1155TokenReceiver {
         uint160 sqrtPriceUpper = TickMath.getSqrtPriceAtTick(tickUpper);
 
         uint128 liquidity = LiquidityAmounts.getLiquidityForAmounts(
-            SQRT_PRICE_1_1,
-            sqrtPriceLower,
-            sqrtPriceUpper,
-            amount0Desired,
-            amount1Desired
+            SQRT_PRICE_1_1, sqrtPriceLower, sqrtPriceUpper, amount0Desired, amount1Desired
         );
 
         ModifyLiquidityParams memory params = ModifyLiquidityParams({
@@ -171,36 +143,22 @@ contract RehypothecationHooksTest is Test, Deployers, ERC1155TokenReceiver {
         });
 
         // Call modifyLiquidity - this will trigger the afterAddLiquidity hook
-        BalanceDelta delta = modifyLiquidityRouter.modifyLiquidity(
-            poolKey,
-            params,
-            ""
-        );
+        BalanceDelta delta = modifyLiquidityRouter.modifyLiquidity(poolKey, params, "");
 
         // Generate position key to check
-        bytes32 positionKey = keccak256(
-            abi.encode(poolKey.toId(), address(this))
-        );
+        bytes32 positionKey = keccak256(abi.encode(poolKey.toId(), address(this)));
 
         // Check if position exists in orchestrator
-        assertTrue(
-            orchestrator.isPositionExists(positionKey),
-            "Position not created"
-        );
+        assertTrue(orchestrator.isPositionExists(positionKey), "Position not created");
 
         // Get position data
-        ILiquidityOrchestrator.PositionData memory position = orchestrator
-            .getPosition(positionKey);
+        ILiquidityOrchestrator.PositionData memory position = orchestrator.getPosition(positionKey);
 
         // Check position data
         assertTrue(position.exists, "Position should exist");
         assertEq(position.tickLower, tickLower, "Incorrect lower tick");
         assertEq(position.tickUpper, tickUpper, "Incorrect upper tick");
-        assertEq(
-            position.reservePct,
-            Constant.DEFAULT_RESERVE_PCT,
-            "Incorrect reserve percentage"
-        );
+        assertEq(position.reservePct, Constant.DEFAULT_RESERVE_PCT, "Incorrect reserve percentage");
     }
 
     function test_Swap() public {
@@ -208,31 +166,18 @@ contract RehypothecationHooksTest is Test, Deployers, ERC1155TokenReceiver {
         test_AddLiquidity();
 
         // Now perform a swap that crosses the price range
-        SwapParams memory params = SwapParams({
-            zeroForOne: true,
-            amountSpecified: 0.1 ether,
-            sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
-        });
+        SwapParams memory params =
+            SwapParams({zeroForOne: true, amountSpecified: 0.1 ether, sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1});
 
         // Swap will trigger beforeSwap and afterSwap hooks
-        BalanceDelta delta = swapRouter.swap(
-            poolKey,
-            params,
-            PoolSwapTest.TestSettings({
-                takeClaims: false,
-                settleUsingBurn: false
-            }),
-            ""
-        );
+        BalanceDelta delta =
+            swapRouter.swap(poolKey, params, PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false}), "");
 
         // Generate position key
-        bytes32 positionKey = keccak256(
-            abi.encode(poolKey.toId(), address(this))
-        );
+        bytes32 positionKey = keccak256(abi.encode(poolKey.toId(), address(this)));
 
         // Check position state after swap
-        ILiquidityOrchestrator.PositionData memory position = orchestrator
-            .getPosition(positionKey);
+        ILiquidityOrchestrator.PositionData memory position = orchestrator.getPosition(positionKey);
 
         // Perform assertions based on expected state changes
         // This will depend on exact swap mechanics and current tick
@@ -244,25 +189,17 @@ contract RehypothecationHooksTest is Test, Deployers, ERC1155TokenReceiver {
         test_AddLiquidity();
 
         // Generate position key
-        bytes32 positionKey = keccak256(
-            abi.encode(poolKey.toId(), address(this))
-        );
+        bytes32 positionKey = keccak256(abi.encode(poolKey.toId(), address(this)));
 
         // Get initial position data
-        ILiquidityOrchestrator.PositionData
-            memory initialPosition = orchestrator.getPosition(positionKey);
+        ILiquidityOrchestrator.PositionData memory initialPosition = orchestrator.getPosition(positionKey);
 
         // Remove half of the liquidity
         int24 tickLower = -60;
         int24 tickUpper = 60;
 
         // Get current liquidity in the position
-        (uint128 liquidity, , , , ) = manager.getPosition(
-            poolKey.toId(),
-            address(this),
-            tickLower,
-            tickUpper
-        );
+        (uint128 liquidity,,,,) = manager.getPosition(poolKey.toId(), address(this), tickLower, tickUpper);
 
         ModifyLiquidityParams memory params = ModifyLiquidityParams({
             tickLower: tickLower,
@@ -272,20 +209,12 @@ contract RehypothecationHooksTest is Test, Deployers, ERC1155TokenReceiver {
         });
 
         // Call modifyLiquidity - this will trigger beforeRemoveLiquidity and afterRemoveLiquidity hooks
-        BalanceDelta delta = modifyLiquidityRouter.modifyLiquidity(
-            poolKey,
-            params,
-            ""
-        );
+        BalanceDelta delta = modifyLiquidityRouter.modifyLiquidity(poolKey, params, "");
 
         // Check position state after removal
-        ILiquidityOrchestrator.PositionData memory finalPosition = orchestrator
-            .getPosition(positionKey);
+        ILiquidityOrchestrator.PositionData memory finalPosition = orchestrator.getPosition(positionKey);
 
-        assertTrue(
-            finalPosition.exists,
-            "Position should still exist after partial removal"
-        );
+        assertTrue(finalPosition.exists, "Position should still exist after partial removal");
         // Add more assertions based on expected behavior
     }
 
@@ -294,25 +223,17 @@ contract RehypothecationHooksTest is Test, Deployers, ERC1155TokenReceiver {
         test_AddLiquidity();
 
         // Generate position key
-        bytes32 positionKey = keccak256(
-            abi.encode(poolKey.toId(), address(this))
-        );
+        bytes32 positionKey = keccak256(abi.encode(poolKey.toId(), address(this)));
 
         // Get current position data
-        ILiquidityOrchestrator.PositionData
-            memory initialPosition = orchestrator.getPosition(positionKey);
+        ILiquidityOrchestrator.PositionData memory initialPosition = orchestrator.getPosition(positionKey);
 
         // Remove all liquidity
         int24 tickLower = -60;
         int24 tickUpper = 60;
 
         // Get current liquidity in the position
-        (uint128 liquidity, , , , ) = manager.getPosition(
-            poolKey.toId(),
-            address(this),
-            tickLower,
-            tickUpper
-        );
+        (uint128 liquidity,,,,) = manager.getPosition(poolKey.toId(), address(this), tickLower, tickUpper);
 
         ModifyLiquidityParams memory params = ModifyLiquidityParams({
             tickLower: tickLower,
@@ -322,15 +243,10 @@ contract RehypothecationHooksTest is Test, Deployers, ERC1155TokenReceiver {
         });
 
         // Call modifyLiquidity - this will trigger hooks
-        BalanceDelta delta = modifyLiquidityRouter.modifyLiquidity(
-            poolKey,
-            params,
-            ""
-        );
+        BalanceDelta delta = modifyLiquidityRouter.modifyLiquidity(poolKey, params, "");
 
         // Check position state after complete removal
-        ILiquidityOrchestrator.PositionData memory finalPosition = orchestrator
-            .getPosition(positionKey);
+        ILiquidityOrchestrator.PositionData memory finalPosition = orchestrator.getPosition(positionKey);
 
         assertTrue(finalPosition.exists, "Position record should still exist");
         assertEq(
@@ -352,24 +268,14 @@ contract RehypothecationHooksTest is Test, Deployers, ERC1155TokenReceiver {
         });
 
         // Swap will trigger hooks
-        BalanceDelta delta = swapRouter.swap(
-            poolKey,
-            params,
-            PoolSwapTest.TestSettings({
-                takeClaims: false,
-                settleUsingBurn: false
-            }),
-            ""
-        );
+        BalanceDelta delta =
+            swapRouter.swap(poolKey, params, PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false}), "");
 
         // Generate position key
-        bytes32 positionKey = keccak256(
-            abi.encode(poolKey.toId(), address(this))
-        );
+        bytes32 positionKey = keccak256(abi.encode(poolKey.toId(), address(this)));
 
         // Check if position state changed to IN_AAVE
-        ILiquidityOrchestrator.PositionData memory position = orchestrator
-            .getPosition(positionKey);
+        ILiquidityOrchestrator.PositionData memory position = orchestrator.getPosition(positionKey);
 
         // This assertion depends on exact implementation
         // If price moved out of range, liquidity should be moved to Aave
@@ -390,41 +296,23 @@ contract RehypothecationHooksTest is Test, Deployers, ERC1155TokenReceiver {
 
         // Execute swap
         swapRouter.swap(
-            poolKey,
-            smallSwapParams,
-            PoolSwapTest.TestSettings({
-                takeClaims: false,
-                settleUsingBurn: false
-            }),
-            ""
+            poolKey, smallSwapParams, PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false}), ""
         );
 
         // Now make a large swap to cross range boundaries
-        SwapParams memory largeSwapParams = SwapParams({
-            zeroForOne: true,
-            amountSpecified: 0.5 ether,
-            sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
-        });
+        SwapParams memory largeSwapParams =
+            SwapParams({zeroForOne: true, amountSpecified: 0.5 ether, sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1});
 
         // Execute swap that should trigger rebalancing
         swapRouter.swap(
-            poolKey,
-            largeSwapParams,
-            PoolSwapTest.TestSettings({
-                takeClaims: false,
-                settleUsingBurn: false
-            }),
-            ""
+            poolKey, largeSwapParams, PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false}), ""
         );
 
         // Generate position key
-        bytes32 positionKey = keccak256(
-            abi.encode(poolKey.toId(), address(this))
-        );
+        bytes32 positionKey = keccak256(abi.encode(poolKey.toId(), address(this)));
 
         // Check position state
-        ILiquidityOrchestrator.PositionData memory position = orchestrator
-            .getPosition(positionKey);
+        ILiquidityOrchestrator.PositionData memory position = orchestrator.getPosition(positionKey);
 
         // Verify state transitions based on implementation
         assertTrue(position.exists, "Position should exist after rebalancing");
@@ -443,11 +331,7 @@ contract RehypothecationHooksTest is Test, Deployers, ERC1155TokenReceiver {
         uint160 sqrtPriceUpper2 = TickMath.getSqrtPriceAtTick(tickUpper2);
 
         uint128 liquidity2 = LiquidityAmounts.getLiquidityForAmounts(
-            SQRT_PRICE_1_1,
-            sqrtPriceLower2,
-            sqrtPriceUpper2,
-            0.5 ether,
-            0.5 ether
+            SQRT_PRICE_1_1, sqrtPriceLower2, sqrtPriceUpper2, 0.5 ether, 0.5 ether
         );
 
         ModifyLiquidityParams memory params2 = ModifyLiquidityParams({
@@ -461,32 +345,21 @@ contract RehypothecationHooksTest is Test, Deployers, ERC1155TokenReceiver {
         modifyLiquidityRouter.modifyLiquidity(poolKey, params2, "");
 
         // Execute multiple swaps
-        for (uint i = 0; i < 3; i++) {
+        for (uint256 i = 0; i < 3; i++) {
             SwapParams memory swapParams = SwapParams({
                 zeroForOne: i % 2 == 0, // Alternate swap direction
                 amountSpecified: 0.1 ether,
-                sqrtPriceLimitX96: i % 2 == 0
-                    ? TickMath.MIN_SQRT_PRICE + 1
-                    : TickMath.MAX_SQRT_PRICE - 1
+                sqrtPriceLimitX96: i % 2 == 0 ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1
             });
 
             swapRouter.swap(
-                poolKey,
-                swapParams,
-                PoolSwapTest.TestSettings({
-                    takeClaims: false,
-                    settleUsingBurn: false
-                }),
-                ""
+                poolKey, swapParams, PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false}), ""
             );
         }
 
         // Check both positions
-        bytes32 positionKey1 = keccak256(
-            abi.encode(poolKey.toId(), address(this))
-        );
-        ILiquidityOrchestrator.PositionData memory position1 = orchestrator
-            .getPosition(positionKey1);
+        bytes32 positionKey1 = keccak256(abi.encode(poolKey.toId(), address(this)));
+        ILiquidityOrchestrator.PositionData memory position1 = orchestrator.getPosition(positionKey1);
 
         assertTrue(position1.exists, "First position should still exist");
 

@@ -9,9 +9,6 @@ import {IAave} from "./interfaces/IAave.sol";
 contract LiquidityOrchestrator is ILiquidityOrchestrator {
     IAave public Aave;
 
-    error PositionNotFound();
-    error NotOwner();
-
     using Constant for uint256;
 
     address public owner;
