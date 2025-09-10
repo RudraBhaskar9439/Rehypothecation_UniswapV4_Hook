@@ -222,6 +222,12 @@ contract RehypothecationHooksTest is Test, Deployers, ERC1155TokenReceiver {
 
         // Check if liquidity went to Aave
         ILiquidityOrchestrator.PositionData memory position = orchestrator.getPosition(positionKey);
+        console.log("Position state:", uint8(position.state));
+        console.log("Position Aave amount 0:", position.aaveAmount0);
+        console.log("Position Aave amount 1:", position.aaveAmount1);
+        console.log("Position reserve amount 0:", position.reserveAmount0);
+        console.log("Position reserve amount 1:", position.reserveAmount1);
+        console.log("Position liquidity:", position.totalLiquidity);
         assertTrue(position.state == ILiquidityOrchestrator.PositionState.IN_AAVE, "Position should be in Aave");
         assertTrue(position.aaveAmount0 > 0 || position.aaveAmount1 > 0, "No liquidity in Aave");
     }

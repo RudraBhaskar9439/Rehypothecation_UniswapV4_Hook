@@ -138,10 +138,10 @@ contract LiquidityOrchestrator is ILiquidityOrchestrator {
         // Calculate amounts to deposit based on reservePct
         uint8 reservePCT = p.reservePct == 0 ? Constant.DEFAULT_RESERVE_PCT : p.reservePct;
 
-        uint256 depositAmount0 = (p.reserveAmount0 * (100 - reservePCT)) / 100;
-        uint256 depositAmount1 = (p.reserveAmount1 * (100 - reservePCT)) / 100;
+        uint256 amount0ToDeposit = (p.reserveAmount0 * (100 - reservePCT)) / 100;
+        uint256 amount1ToDeposit = (p.reserveAmount1 * (100 - reservePCT)) / 100;
 
-        if (depositAmount0 == 0 && depositAmount1 == 0) {
+        if (amount0ToDeposit == 0 && amount1ToDeposit == 0) {
             return true; // Nothing to deposit
         }
 
