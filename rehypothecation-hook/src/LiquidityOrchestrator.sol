@@ -294,6 +294,9 @@ contract LiquidityOrchestrator is ILiquidityOrchestrator {
         bool outOfRange = (currentTick < p.tickLower ||
             currentTick > p.tickUpper);
         if (outOfRange && p.state == PositionState.IN_RANGE) {
+            if(!outOfRange) {
+                return true; // In range removal, no rebalance needed
+            }
             // Position is out of range and liquidity is in Uniswap - deposit to Aave
             uint256 amount0ToDeposit = (p.reserveAmount0 * 80) / 100;
             uint256 amount1ToDeposit = (p.reserveAmount1 * 80) / 100;
@@ -342,6 +345,7 @@ contract LiquidityOrchestrator is ILiquidityOrchestrator {
 
             return depositSuccess;
         }
+        return true;
     }
 
     /**
