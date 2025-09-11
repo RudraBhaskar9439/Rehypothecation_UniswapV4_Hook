@@ -496,4 +496,135 @@ contract RehypothecationHooksTest is Test, Deployers, ERC1155TokenReceiver {
             poolKey, ModifyLiquidityParams(lower, upper, -int256(uint256(liq)), bytes32(0)), data
         );
     }
-}
+
+    function test_removeLiquidityInRange() public {
+        // get current tick and setting ther in-range liquidity
+        (,int24 currentTick,,) = manager.getSlot0(poolKey.toId());
+
+        int24 tickLower = currentTick - 60;
+        int24 tickUpper = currentTick + 60;
+
+        uint256 amount0Desired = 1 ether;
+        uint256 amount1Desired = 1 ether;
+
+        // Calculating the liquidity amount
+        uint160 sqrtPriceLower = TickMath.getSqrtPriceAtTick(tickLower);
+        uint160 sqrtPriceUpper = TickMath.getSqrtPriceAtTick(tickUpper);
+
+        uint128 liquidity = LiquidityAmounts.getLiquidityForAmounts(
+            SQRT_PRICE_1_1,
+            sqrtPriceLower,
+            sqrtPriceUpper,
+            amount0Desired,
+            amount1Desired
+        );
+
+        bytes memory hookData = abi.encode(tickLower,tickUpper);
+        bytes32 positionKey = keccak256(abi.encodePacked(poolKey.toId(), tickLower, tickUpper));
+
+        // Add liquidity first
+        _addLiquidity(tickLower, tickUpper, liquidity, hookData);
+
+        // Verify funds are in Aave
+        ILiquidityOrchestrator.PositionData memory positionBefore = orchestrator.getPosition(positionKey);
+       
+        assertEq(positionBefore.aaveAmount0, 0, "Expected no Aave liquidity (token0) before removal");
+        assertEq(positionBefore.aaveAmount1, 0, "Expected no Aave liquidity (token1) before removal");
+        assertTrue(positionBefore.state == ILiquidityOrchestrator.PositionState.IN_RANGE, "Expected IN_Range before removal");
+
+        // Record balances before removal
+        uint256 balanceBefore0 = token0.balanceOf(address(this));
+        uint256 balanceBefore1 = token1.balanceOf(address(this));
+
+        //Remove the iNrange liquidity
+        _removeLiquidity(tickLower, tickUpper, liquidity, hookData);
+
+        //Checking the balance increase , indicating tokens were returned
+        assertTrue(token0.balanceOf(address(this)) > balanceBefore0 || token1.balanceOf(address(this)) > balanceBefore1 ,
+        "No tokens returned after Liquidity removal");
+
+        ILiquidityOrchestrator.PositionData memory positionAfter = orchestrator.getPosition(positionKey);
+
+        assertEq(positionAfter.aaveAmount0, 0, "Token0 Aave amount should remain 0 after removal");
+        assertEq(positionAfter.aaveAmount1, 0, "Token1 Aave amount should remain 0 after removal");
+        assertTrue(positionAfter.state == ILiquidityOrchestrator.PositionState.IN_RANGE, "Wrong final state after in-range removal");
+
+        //_addLiquidity Example: Checking owner from Orchestrator (as in the swap test)
+        address orchestratorOwner = orchestrator.owner(); 
+        assertEq(orchestratorOwner, address(this), "Orchestrator owner mismatch");
+
+    }
+    
+    // function test_swapWithFinalTickInRange() public {
+    //     // Add liquidity in range
+    //     (,int24 currentTickBeforeAdd,,) = manager.getSlot0(poolKey.toId());
+    //     int24 tickLower = currentTickBeforeAdd - 60;
+    //     int24 tickUpper = currentTickBeforeAdd + 60;
+
+    //     uint256 amount0Desired = 1 ether;
+    //     uint256 amount1Desired = 1 ether;
+
+    //     uint128 liquidity = LiquidityAmounts.getLiquidityForAmounts(
+    //         SQRT_PRICE_1_1,
+    //         TickMath.getSqrtPriceAtTick(tickLower),
+    //         TickMath.getSqrtPriceAtTick(tickUpper),
+    //         amount0Desired,
+    //         amount1Desired
+    //     );
+    //     bytes memory hookData = abi.encode(tickLower, tickUpper);
+    //     bytes32 positionKey = keccak256(abi.encodePacked(poolKey.toId(), tickLower, tickUpper));
+
+    //     _addLiquidity(tickLower, tickUpper, liquidity, hookData);
+
+    //     ILiquidityOrchestrator.PositionData memory positionBeforeSwap = orchestrator.getPosition(positionKey);
+    //     assertEq(positionBeforeSwap.aaveAmount0, 0, "Token0 Aave amount should be 0 before swap");
+    //     assertEq(positionBeforeSwap.aaveAmount1, 0, "Token1 Aave amount should be 0 before swap");
+    //     assertTrue(positionBeforeSwap.state == ILiquidityOrchestrator.PositionState.IN_RANGE, "State should be IN_RANGE before swap");
+
+    //     // Record initial balances of the orchestrator to check for any unexpected transfers
+    //     uint256 orchestratorBalance0BeforeSwap = token0.balanceOf(address(orchestrator));
+    //     uint256 orchestratorBalance1BeforeSwap = token1.balanceOf(address(orchestrator));
+
+    //     SwapParams memory swapParams = SwapParams({
+    //         zeroForOne: true, // Swap token0 for token1
+    //         amountSpecified: 0.01 ether, // Small amount
+    //         sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1 // Allow price to move
+    //     });
+
+    //     int24 oldTick = _getTickFromPoolManager(poolKey);
+    //     console.log("Old tick before swap:", oldTick);
+
+    //     _performSwap(poolKey, swapParams, hookData);
+
+    //     int24 newTick = _getTickFromPoolManager(poolKey);
+    //     console.log("New tick after swap:", newTick);
+
+    //     // Verify final state: liquidity should still be IN_RANGE and not in Aave
+    //     ILiquidityOrchestrator.PositionData memory positionAfterSwap = orchestrator.getPosition(positionKey);
+    //     assertEq(positionAfterSwap.aaveAmount0, 0, "Token0 Aave amount should still be 0 after in-range swap");
+    //     assertEq(positionAfterSwap.aaveAmount1, 0, "Token1 Aave amount should still be 0 after in-range swap");
+    //     assertTrue(positionAfterSwap.state == ILiquidityOrchestrator.PositionState.IN_RANGE, "State should remain IN_RANGE after in-range swap");
+        
+    //     // Verify orchestrator balances did not change due to Aave deposits/withdrawals
+    //     assertEq(token0.balanceOf(address(orchestrator)), orchestratorBalance0BeforeSwap, "Orchestrator token0 balance changed unexpectedly");
+    //     assertEq(token1.balanceOf(address(orchestrator)), orchestratorBalance1BeforeSwap, "Orchestrator token1 balance changed unexpectedly");
+        
+    //     // Assert that the new tick is still within the original range
+    //     assertTrue(newTick >= tickLower && newTick <= tickUpper, "Final tick should remain within the liquidity range");
+        
+    //     console.log("Swap completed successfully with final tick in range.");
+    //         }
+
+    //     function _getTickFromPoolManager(PoolKey memory _poolKey) internal view returns (int24) {
+    //             // The getSlot0 function returns 7 values, we only need the second one (tick).
+    //             ( , int24 currentTick, ,  ) = manager.getSlot0(_poolKey.toId());
+    //             return currentTick;
+    //         }
+    //     function _performSwap(PoolKey memory _poolKey, SwapParams memory _swapParams, bytes memory _hookData) internal {
+    //             // The modifyLiquidityRouter's swap function will trigger the hooks
+    //             modifyLiquidityRouter.swap(_poolKey, _swapParams, _hookData);
+    //         }
+            
+    }
+    
+
