@@ -607,6 +607,109 @@ contract RehypothecationHooksTest is Test, Deployers, ERC1155TokenReceiver {
         );
     }
 
+    function test_swapwithFinalTickOutOfRange() public {
+        // 1. Add liquidity in range
+        (, int24 currentTick, , ) = manager.getSlot0(poolKey.toId());
+        int24 tickLower = currentTick - 60;
+        int24 tickUpper = currentTick + 60;
+
+        uint256 amount0Desired = 1 ether;
+        uint256 amount1Desired = 1 ether;
+
+        uint160 sqrtPriceLower = TickMath.getSqrtPriceAtTick(tickLower);
+        uint160 sqrtPriceUpper = TickMath.getSqrtPriceAtTick(tickUpper);
+
+        uint128 liquidity = LiquidityAmounts.getLiquidityForAmounts(
+            SQRT_PRICE_1_1,
+            sqrtPriceLower,
+            sqrtPriceUpper,
+            amount0Desired,
+            amount1Desired
+        );
+
+        bytes memory hookData = abi.encode(tickLower, tickUpper);
+        bytes32 positionKey = keccak256(
+            abi.encodePacked(poolKey.toId(), tickLower, tickUpper)
+        );
+
+        _addLiquidity(tickLower, tickUpper, liquidity, hookData);
+
+        // 2. Check position is in range and not in Aave
+        ILiquidityOrchestrator.PositionData memory positionBefore = orchestrator
+            .getPosition(positionKey);
+        assertEq(
+            positionBefore.aaveAmount0,
+            0,
+            "Token0 Aave amount should be 0 before swap"
+        );
+        assertEq(
+            positionBefore.aaveAmount1,
+            0,
+            "Token1 Aave amount should be 0 before swap"
+        );
+        assertTrue(
+            positionBefore.state ==
+                ILiquidityOrchestrator.PositionState.IN_RANGE,
+            "State should be IN_RANGE before swap"
+        );
+
+        // 3. Perform a swap that moves the tick out of range (e.g. large swap)
+        SwapParams memory swapParams = SwapParams({
+            zeroForOne: true,
+            amountSpecified: 2 ether, // Large enough to move price out of range
+            sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
+        });
+
+        // Perform the swap (triggers hooks)
+        swapRouter.swap(
+            poolKey,
+            swapParams,
+            PoolSwapTest.TestSettings({
+                takeClaims: false,
+                settleUsingBurn: false
+            }),
+            hookData
+        );
+
+        // 4. Check tick is now out of range
+        int24 newTick = _getTickFromPoolManager(poolKey);
+        assertTrue(
+            newTick < tickLower || newTick > tickUpper,
+            "Tick should be out of range after swap"
+        );
+
+        // 5. Check position is now in Aave and both tokens are deposited to Aave (80% each)
+        ILiquidityOrchestrator.PositionData memory positionAfter = orchestrator
+            .getPosition(positionKey);
+
+        // Each token's Aave amount should be 80% of its liquidity after swap
+        assertApproxEqAbs(
+            positionAfter.aaveAmount0,
+            ((positionAfter.totalLiquidity / 2) * 80) / 100,
+            1,
+            "Token0 Aave amount should be 80% of its liquidity after swap"
+        );
+        assertApproxEqAbs(
+            positionAfter.aaveAmount1,
+            ((positionAfter.totalLiquidity / 2) * 80) / 100,
+            1,
+            "Token1 Aave amount should be 80% of its liquidity after swap"
+        );
+
+        assertTrue(
+            positionAfter.state == ILiquidityOrchestrator.PositionState.IN_AAVE,
+            "Position should be in Aave after out-of-range swap"
+        );
+    }
+
+    // Helper to get current tick from pool manager
+    function _getTickFromPoolManager(
+        PoolKey memory _poolKey
+    ) internal view returns (int24) {
+        (, int24 currentTick, , ) = manager.getSlot0(_poolKey.toId());
+        return currentTick;
+    }
+
     // function test_removeLiquidityInRange() public {
     //     // get current tick and setting ther in-range liquidity
     //     (,int24 currentTick,,) = manager.getSlot0(poolKey.toId());
