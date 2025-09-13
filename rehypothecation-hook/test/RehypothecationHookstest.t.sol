@@ -51,9 +51,16 @@ contract MockLendingPool {
         uint256 amount,
         address to
     ) external returns (uint256) {
-        require(deposits[to][asset] >= amount, "Not enough balance");
-        deposits[to][asset] -= amount;
-        return amount;
+        uint256 bal = deposits[to][asset];
+        if (amount == type(uint256).max) {
+            require(bal > 0, "Not enough balance");
+            deposits[to][asset] = 0;
+            return bal;
+        } else {
+            require(bal >= amount, "Not enough balance");
+            deposits[to][asset] -= amount;
+            return amount;
+        }
     }
 }
 
