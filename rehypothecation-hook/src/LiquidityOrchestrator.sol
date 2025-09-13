@@ -5,6 +5,8 @@ pragma solidity ^0.8.26;
 import {Constant} from "./utils/Constant.sol";
 import {ILiquidityOrchestrator} from "./interfaces/ILiquidityOrchestrator.sol";
 import {IAave} from "./interfaces/IAave.sol";
+import {FHE, euint32, ebool} from "@fhenixprotocol/contracts/FHE.sol";
+
 
 contract LiquidityOrchestrator is ILiquidityOrchestrator {
     IAave public Aave;
@@ -16,6 +18,7 @@ contract LiquidityOrchestrator is ILiquidityOrchestrator {
 
     mapping(bytes32 => PositionData) public positions; // positionKey => PositionData
     // mapping(bytes32 => int24) public lastActiveTick; // positionKey => lastActiveTick
+    mapping(bytes32 => euint32) private encryptedReservePercentages;
 
     modifier onlyOwner() {
         if (msg.sender != owner) {
@@ -44,13 +47,24 @@ contract LiquidityOrchestrator is ILiquidityOrchestrator {
         if (!p.exists) {
             revert PositionNotFound();
         }
+    // Encrypt tick comparison logic
+        euint32 encryptedCurrentTick = FHE.asEuint32(uint32(int32(currentTick)));
+        euint32 encryptedTickLower = FHE.asEuint32(uint32(int32(p.tickLower)));
+        euint32 encryptedTickUpper = FHE.asEuint32(uint32(int32(p.tickUpper)));
+       
+    // Encrypted range check: currentTick >= tickLower && currentTick <= tickUpper
+    ebool inRangeLower = FHE.gt(encryptedCurrentTick, encryptedTickLower) | FHE.eq(encryptedCurrentTick, encryptedTickLower);
+    ebool inRangeUpper = FHE.lt(encryptedCurrentTick, encryptedTickUpper) | FHE.eq(encryptedCurrentTick, encryptedTickUpper);
+    ebool currentlyInRange = inRangeLower & inRangeUpper;
+       
 
-        // Check if position is currently in range (swap will use this liquidity)
-
-        bool currentlyInRange = (currentTick >= p.tickLower && currentTick <= p.tickUpper);
-
-        // Need withdrawal if: position is currently active BUT liquidity is stuck in Aave
-        return currentlyInRange && (p.state == PositionState.IN_AAVE || p.state == PositionState.AAVE_STUCK);
+     // Encrypt state check
+     ebool isInAave = FHE.eq(FHE.asEuint32(uint32(uint8(p.state))), FHE.asEuint32(uint32(uint8(PositionState.IN_AAVE))));
+     ebool isAaveStuck = FHE.eq(FHE.asEuint32(uint32(uint8(p.state))), FHE.asEuint32(uint32(uint8(PositionState.AAVE_STUCK))));
+     ebool needsWithdrawalEncrypted = currentlyInRange & (isInAave | isAaveStuck);
+    
+    // Return decrypted result (this would need to be handled by the caller with proper permits)
+    return FHE.decrypt(needsWithdrawalEncrypted);
     }
 
     /**
@@ -70,12 +84,34 @@ contract LiquidityOrchestrator is ILiquidityOrchestrator {
             return false;
         }
 
-        // Check if position is currently in range (swap will use this liquidity)
-        bool currentlyInRange = (newTick >= p.tickLower && newTick <= p.tickUpper);
-        bool wasInRange = (oldTick >= p.tickLower && oldTick <= p.tickUpper);
+        // Encrypt tick comparisons
+    euint32 encryptedNewTick = FHE.asEuint32(uint32(int32(newTick)));
+    euint32 encryptedOldTick = FHE.asEuint32(uint32(int32(oldTick)));
+    euint32 encryptedTickLower = FHE.asEuint32(uint32(int32(p.tickLower)));
+    euint32 encryptedTickUpper = FHE.asEuint32(uint32(int32(p.tickUpper)));
 
-        // Need deposit if: position became inactive AND liquidity is currently in Uniswap
-        return wasInRange && !currentlyInRange && p.state == PositionState.IN_RANGE;
+        
+       // Encrypted range checks
+       ebool currentlyInRange = (FHE.gt(encryptedNewTick, encryptedTickLower) | FHE.eq(encryptedNewTick, encryptedTickLower)) & 
+       (FHE.lt(encryptedNewTick, encryptedTickUpper) | FHE.eq(encryptedNewTick, encryptedTickUpper));
+       ebool wasInRange = (FHE.gt(encryptedOldTick, encryptedTickLower) | FHE.eq(encryptedOldTick, encryptedTickLower)) & 
+       (FHE.lt(encryptedOldTick, encryptedTickUpper) | FHE.eq(encryptedOldTick, encryptedTickUpper));
+    // Encrypt state check
+    ebool isInRange = FHE.eq(FHE.asEuint32(uint32(uint8(p.state))), FHE.asEuint32(uint32(uint8(PositionState.IN_RANGE))));
+    
+    // Encrypted logic: wasInRange && !currentlyInRange && p.state == PositionState.IN_RANGE
+    ebool needsDepositEncrypted = wasInRange & FHE.not(currentlyInRange) & isInRange;
+    
+    return FHE.decrypt(needsDepositEncrypted);
+}
+
+function setEncryptedReservePercentage(bytes32 positionKey, bytes calldata encryptedPercentage) external {
+    PositionData storage p = positions[positionKey];
+    if (!p.exists) {
+        revert PositionNotFound();
+    }
+    
+    encryptedReservePercentages[positionKey] = FHE.asEuint32(encryptedPercentage, 0);
     }
 
     /**
@@ -135,11 +171,25 @@ contract LiquidityOrchestrator is ILiquidityOrchestrator {
 
         PositionData storage p = positions[positionKey];
 
-        // Calculate amounts to deposit based on reservePct
-        uint8 reservePCT = p.reservePct == 0 ? Constant.DEFAULT_RESERVE_PCT : p.reservePct;
+         // Get encrypted reserve percentage
+    euint32 encryptedReservePCT = encryptedReservePercentages[positionKey];
+    if (FHE.isInitialized(encryptedReservePCT) == false) {
+        // Use default if not set
+        encryptedReservePCT = FHE.asEuint32(uint32(Constant.DEFAULT_RESERVE_PCT));
+    }
 
-        uint256 amount0ToDeposit = (p.reserveAmount0 * (100 - reservePCT)) / 100;
-        uint256 amount1ToDeposit = (p.reserveAmount1 * (100 - reservePCT)) / 100;
+    // Encrypt reserve amounts
+    euint32 encryptedReserveAmount0 = FHE.asEuint32(uint32(p.reserveAmount0));
+    euint32 encryptedReserveAmount1 = FHE.asEuint32(uint32(p.reserveAmount1));
+    
+    // Encrypted calculations: (amount * (100 - reservePCT)) / 100
+    euint32 encryptedAmount0ToDeposit = (encryptedReserveAmount0 * (FHE.asEuint32(100) - encryptedReservePCT)) / FHE.asEuint32(100);
+    euint32 encryptedAmount1ToDeposit = (encryptedReserveAmount1 * (FHE.asEuint32(100) - encryptedReservePCT)) / FHE.asEuint32(100);
+
+    // Decrypt for actual operations (this would need proper permit handling)
+    uint256 amount0ToDeposit = FHE.decrypt(encryptedAmount0ToDeposit);
+    uint256 amount1ToDeposit = FHE.decrypt(encryptedAmount1ToDeposit);
+
 
         if (amount0ToDeposit == 0 && amount1ToDeposit == 0) {
             return true; // Nothing to deposit

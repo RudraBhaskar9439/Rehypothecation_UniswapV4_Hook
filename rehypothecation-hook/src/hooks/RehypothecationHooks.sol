@@ -19,6 +19,7 @@ import {IAave} from "../interfaces/IAave.sol";
 import {Constant} from "../utils/Constant.sol";
 
 import {ILiquidityOrchestrator} from "../interfaces/ILiquidityOrchestrator.sol";
+import "@fhenixprotocol/contracts/FHE.sol";
 
 contract RehypothecationHooks is BaseHook {
     using PoolIdLibrary for PoolKey;
@@ -26,6 +27,9 @@ contract RehypothecationHooks is BaseHook {
     using CurrencyLibrary for Currency;
     using StateLibrary for IPoolManager;
 
+     // Encrypted tick storage for privacy
+     mapping(bytes32 => euint32) private encryptedLastActiveTicks;
+    
     // State Variable
     IAave public immutable aavePool;
     ILiquidityOrchestrator public immutable liquidityOrchestrator;
@@ -248,6 +252,10 @@ contract RehypothecationHooks is BaseHook {
         (int24 lowerTick, int24 upperTick) = abi.decode(hookData, (int24, int24));
         bytes32 positionKey = _generatePositionKey(key, lowerTick, upperTick);
 
+        // Encrypt current tick for privacy
+    euint32 encryptedCurrentTick = FHE.asEuint32(uint32(int32(currentTick)));
+    encryptedLastActiveTicks[positionKey] = encryptedCurrentTick;
+
         address token0 = Currency.unwrap(key.currency0);
         address token1 = Currency.unwrap(key.currency1);
 
@@ -281,7 +289,18 @@ contract RehypothecationHooks is BaseHook {
 
         (int24 lowerTick, int24 upperTick) = abi.decode(hookData, (int24, int24));
         bytes32 positionKey = _generatePositionKey(key, lowerTick, upperTick);
+
+        // Encrypt tick values for privacy
+    euint32 encryptedOldTick = FHE.asEuint32(uint32(int32(oldTick)));
+    euint32 encryptedNewTick = FHE.asEuint32(uint32(int32(newTick)));
+    
+    // Store encrypted ticks
+    encryptedLastActiveTicks[positionKey] = encryptedNewTick;
+
+
         ILiquidityOrchestrator.PositionData memory p = liquidityOrchestrator.getPosition(positionKey);
+         // Encrypt swap direction and amounts
+    ebool isZeroForOne = FHE.asEbool(params.zeroForOne);
 
         if (params.zeroForOne) {
             // token0 -> token1
