@@ -10,3 +10,6 @@
 [submodule "rehypothecation-hook/lib/protocol-v2"]
 	path = rehypothecation-hook/lib/protocol-v2
 	url = https://github.com/aave/protocol-v2
+[submodule "rehypothecation-hook/lib/fhenix-contracts"]
+	path = rehypothecation-hook/lib/fhenix-contracts
+	url = https://github.com/FhenixProtocol/fhenix-contracts
