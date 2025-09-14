@@ -6,7 +6,7 @@ import {console} from "forge-std/console.sol";
 import {Deployers} from "@uniswap/v4-core/test/utils/Deployers.sol";
 import {PoolSwapTest} from "v4-core/test/PoolSwapTest.sol";
 import {MockERC20} from "solmate/src/test/utils/mocks/MockERC20.sol";
-
+import {euint256, FHE, ebool} from "@fhenixprotocol/contracts/FHE.sol";
 import {PoolManager} from "v4-core/PoolManager.sol";
 import {SwapParams, ModifyLiquidityParams} from "v4-core/types/PoolOperation.sol";
 import {IPoolManager} from "v4-core/interfaces/IPoolManager.sol";
@@ -270,11 +270,11 @@ contract RehypothecationHooksTest is Test, Deployers, ERC1155TokenReceiver {
         ILiquidityOrchestrator.PositionData memory position = orchestrator
             .getPosition(positionKey);
         console.log("Position state:", uint8(position.state));
-        console.log("Position Aave amount 0:", position.aaveAmount0);
-        console.log("Position Aave amount 1:", position.aaveAmount1);
-        console.log("Position reserve amount 0:", position.reserveAmount0);
-        console.log("Position reserve amount 1:", position.reserveAmount1);
-        console.log("Position liquidity:", position.totalLiquidity);
+        console.log("Position Aave amount 0:", FHE.decrypt(position.aaveAmount0));
+        console.log("Position Aave amount 1:", FHE.decrypt(position.aaveAmount1));
+        console.log("Position reserve amount 0:", FHE.decrypt(position.reserveAmount0));
+        console.log("Position reserve amount 1:", FHE.decrypt(position.reserveAmount1));
+        console.log("Position liquidity:", FHE.decrypt(position.totalLiquidity));
         assertTrue(
             position.state == ILiquidityOrchestrator.PositionState.IN_AAVE,
             "Position should be in Aave"

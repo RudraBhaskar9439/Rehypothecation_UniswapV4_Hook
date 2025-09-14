@@ -5,6 +5,7 @@ pragma solidity ^0.8.26;
 import {Constant} from "./utils/Constant.sol";
 import {ILiquidityOrchestrator} from "./interfaces/ILiquidityOrchestrator.sol";
 import {IAave} from "./interfaces/IAave.sol";
+import {euint256, FHE, ebool} from "@fhenixprotocol/contracts/FHE.sol";
 
 contract LiquidityOrchestrator is ILiquidityOrchestrator {
     IAave public Aave;
@@ -35,11 +36,10 @@ contract LiquidityOrchestrator is ILiquidityOrchestrator {
      * @param currentTick Current tick before swap
      * @return needsWithdrawal True if position is currently active but liquidity is in Aave
      */
-    function checkPreSwapLiquidityNeeds(bytes32 positionKey, int24 currentTick)
-        public
-        view
-        returns (bool needsWithdrawal)
-    {
+    function checkPreSwapLiquidityNeeds(
+        bytes32 positionKey,
+        int24 currentTick
+    ) public view returns (bool needsWithdrawal) {
         PositionData storage p = positions[positionKey];
         if (!p.exists) {
             revert PositionNotFound();
@@ -47,10 +47,14 @@ contract LiquidityOrchestrator is ILiquidityOrchestrator {
 
         // Check if position is currently in range (swap will use this liquidity)
 
-        bool currentlyInRange = (currentTick >= p.tickLower && currentTick <= p.tickUpper);
+        bool currentlyInRange = (currentTick >= p.tickLower &&
+            currentTick <= p.tickUpper);
 
         // Need withdrawal if: position is currently active BUT liquidity is stuck in Aave
-        return currentlyInRange && (p.state == PositionState.IN_AAVE || p.state == PositionState.AAVE_STUCK);
+        return
+            currentlyInRange &&
+            (p.state == PositionState.IN_AAVE ||
+                p.state == PositionState.AAVE_STUCK);
     }
 
     /**
@@ -60,22 +64,26 @@ contract LiquidityOrchestrator is ILiquidityOrchestrator {
      * @param newTick Tick after swap
      * @return needsDeposit True if position became inactive and should go to Aave
      */
-    function checkPostSwapLiquidityNeeds(bytes32 positionKey, int24 oldTick, int24 newTick)
-        public
-        view
-        returns (bool needsDeposit)
-    {
+    function checkPostSwapLiquidityNeeds(
+        bytes32 positionKey,
+        int24 oldTick,
+        int24 newTick
+    ) public view returns (bool needsDeposit) {
         PositionData storage p = positions[positionKey];
         if (!p.exists) {
             return false;
         }
 
         // Check if position is currently in range (swap will use this liquidity)
-        bool currentlyInRange = (newTick >= p.tickLower && newTick <= p.tickUpper);
+        bool currentlyInRange = (newTick >= p.tickLower &&
+            newTick <= p.tickUpper);
         bool wasInRange = (oldTick >= p.tickLower && oldTick <= p.tickUpper);
 
         // Need deposit if: position became inactive AND liquidity is currently in Uniswap
-        return wasInRange && !currentlyInRange && p.state == PositionState.IN_RANGE;
+        return
+            wasInRange &&
+            !currentlyInRange &&
+            p.state == PositionState.IN_RANGE;
     }
 
     /**
@@ -84,20 +92,29 @@ contract LiquidityOrchestrator is ILiquidityOrchestrator {
      * @param currentTick Current tick
      * @return success True if preparation successful
      */
-    function preparePreSwapLiquidity(bytes32 positionKey, int24 currentTick, address asset0, address asset1)
-        external
-        returns (bool success)
-    {
+    function preparePreSwapLiquidity(
+        bytes32 positionKey,
+        int24 currentTick,
+        address asset0,
+        address asset1
+    ) external returns (bool success) {
         if (!checkPreSwapLiquidityNeeds(positionKey, currentTick)) {
             return true; // Already in uniswap
         }
 
         PositionData storage p = positions[positionKey];
 
-        try Aave.withdraw(asset0, type(uint256).max, address(this)) returns (uint256 withdrawnAmount0) {
-            try Aave.withdraw(asset1, type(uint256).max, address(this)) returns (uint256 withdrawnAmount1) {
-                p.reserveAmount1 += withdrawnAmount1;
-                p.aaveAmount1 = 0;
+        try Aave.withdraw(asset0, type(uint256).max, address(this)) returns (
+            uint256 withdrawnAmount0
+        ) {
+            try
+                Aave.withdraw(asset1, type(uint256).max, address(this))
+            returns (uint256 withdrawnAmount1) {
+                uint256 reserveAmount1 = FHE.decrypt(p.reserveAmount1);
+                reserveAmount1 += withdrawnAmount1;
+
+                p.reserveAmount1 = FHE.asEuint256(reserveAmount1);
+                p.aaveAmount1 = FHE.asEuint256(0);
                 emit PreSwapLiquidityPrepared(positionKey, withdrawnAmount1);
             } catch {
                 p.state = PositionState.AAVE_STUCK;
@@ -105,8 +122,10 @@ contract LiquidityOrchestrator is ILiquidityOrchestrator {
                 return false;
             }
             p.state = PositionState.IN_RANGE;
-            p.reserveAmount0 += withdrawnAmount0;
-            p.aaveAmount0 = 0;
+            uint256 reserveAmount0 = FHE.decrypt(p.reserveAmount0);
+            reserveAmount0 += withdrawnAmount0;
+            p.reserveAmount0 = FHE.asEuint256(reserveAmount0);
+            p.aaveAmount0 = FHE.asEuint256(0);
             emit PreSwapLiquidityPrepared(positionKey, withdrawnAmount0);
             return true;
         } catch {
@@ -116,7 +135,8 @@ contract LiquidityOrchestrator is ILiquidityOrchestrator {
     }
 
     /**
-     * @notice Execute post-swap liquidity management (deposit to Aave if position went out of range). To be called by afterSwap hook
+     * @notice Execute post-swap liquidity management (deposit to Aave if position went out of range).
+     * To be called by afterSwap hook
      * @param positionKey The position identifier
      * @param oldTick Tick before swap
      * @param newTick Tick after swap
@@ -136,10 +156,17 @@ contract LiquidityOrchestrator is ILiquidityOrchestrator {
         PositionData storage p = positions[positionKey];
 
         // Calculate amounts to deposit based on reservePct
-        uint8 reservePCT = p.reservePct == 0 ? Constant.DEFAULT_RESERVE_PCT : p.reservePct;
+        uint8 reservePCT = p.reservePct == 0
+            ? Constant.DEFAULT_RESERVE_PCT
+            : p.reservePct;
 
-        uint256 amount0ToDeposit = (p.reserveAmount0 * (100 - reservePCT)) / 100;
-        uint256 amount1ToDeposit = (p.reserveAmount1 * (100 - reservePCT)) / 100;
+        //Decryption initiated
+        uint256 reserveAmount0 = FHE.decrypt(p.reserveAmount0);
+        uint256 reserveAmount1 = FHE.decrypt(p.reserveAmount1);
+
+        // Get decrypted values
+        uint256 amount0ToDeposit = (reserveAmount0 * (100 - reservePCT)) / 100;
+        uint256 amount1ToDeposit = (reserveAmount1 * (100 - reservePCT)) / 100;
 
         if (amount0ToDeposit == 0 && amount1ToDeposit == 0) {
             return true; // Nothing to deposit
@@ -149,8 +176,13 @@ contract LiquidityOrchestrator is ILiquidityOrchestrator {
 
         if (amount0ToDeposit > 0) {
             try Aave.deposit(asset0, amount0ToDeposit, address(this), 0) {
-                p.reserveAmount0 -= amount0ToDeposit;
-                p.aaveAmount0 += amount0ToDeposit;
+                reserveAmount0 -= amount0ToDeposit;
+                p.reserveAmount0 = FHE.asEuint256(reserveAmount0);
+
+                uint256 aaveAmount0 = FHE.decrypt(p.aaveAmount0);
+                aaveAmount0 += amount0ToDeposit;
+                p.aaveAmount0 = FHE.asEuint256(aaveAmount0);
+
                 depositSuccess = true;
                 emit PostAddLiquidityDeposited(positionKey, amount0ToDeposit);
             } catch {
@@ -161,10 +193,18 @@ contract LiquidityOrchestrator is ILiquidityOrchestrator {
 
         if (amount1ToDeposit > 0) {
             try Aave.deposit(asset1, amount1ToDeposit, address(this), 0) {
-                p.reserveAmount1 -= amount1ToDeposit;
-                p.aaveAmount1 += amount1ToDeposit;
+                reserveAmount1 -= amount1ToDeposit;
+                p.reserveAmount1 = FHE.asEuint256(reserveAmount1);
+
+                uint256 aaveAmount1 = FHE.decrypt(p.aaveAmount1);
+                aaveAmount1 += amount1ToDeposit;
+                p.aaveAmount1 = FHE.asEuint256(aaveAmount1);
+
                 depositSuccess = true;
-                emit PostWithdrawalLiquidityDeposited(positionKey, amount1ToDeposit);
+                emit PostWithdrawalLiquidityDeposited(
+                    positionKey,
+                    amount1ToDeposit
+                );
             } catch {
                 emit DepositFailed(positionKey, "Token1 deposit failed");
                 depositSuccess = false;
@@ -179,14 +219,16 @@ contract LiquidityOrchestrator is ILiquidityOrchestrator {
     }
 
     /**
-     * @notice  This is a helper function to prepare position for withdrawal in case if the LP wants to withdraw. To be called by beforeRemoveLiquidity hook
+     * @notice  This is a helper function to prepare position for withdrawal in case if the LP wants to withdraw.
+     *         To be called by beforeRemoveLiquidity hook
      * @param   positionKey  The position identifier
      * @return  success  True if preparation was successful
      */
-    function preparePositionForWithdrawal(bytes32 positionKey, address asset0, address asset1)
-        external
-        returns (bool success)
-    {
+    function preparePositionForWithdrawal(
+        bytes32 positionKey,
+        address asset0,
+        address asset1
+    ) external returns (bool success) {
         PositionData storage p = positions[positionKey];
         if (!p.exists) {
             revert PositionNotFound();
@@ -198,33 +240,60 @@ contract LiquidityOrchestrator is ILiquidityOrchestrator {
         }
 
         // this will only trigger if the state is IN_AAVE or AAVE_STUCK
-        if (p.aaveAmount0 == 0 && p.aaveAmount1 == 0) {
+        bool isAaveAmount0Zero = FHE.decrypt(
+            p.aaveAmount0.eq(FHE.asEuint256(0))
+        );
+        bool isAaveAmount1Zero = FHE.decrypt(
+            p.aaveAmount1.eq(FHE.asEuint256(0))
+        );
+        if (isAaveAmount0Zero && isAaveAmount1Zero) {
             // Nothing to pull back from Aave
             return true;
         }
 
         // Withdraw token0 if present
-        if (p.aaveAmount0 > 0) {
-            try Aave.withdraw(asset0, type(uint256).max, address(this)) returns (uint256 withdrawnAmount0) {
-                p.reserveAmount0 += withdrawnAmount0;
-                p.aaveAmount0 = 0;
-                emit PreparePositionForWithdrawed(positionKey, withdrawnAmount0);
+        if (FHE.decrypt(p.aaveAmount0) > 0) {
+            try
+                Aave.withdraw(asset0, type(uint256).max, address(this))
+            returns (uint256 withdrawnAmount0) {
+                uint256 reserveAmount0 = FHE.decrypt(p.reserveAmount0);
+                reserveAmount0 += withdrawnAmount0;
+                p.reserveAmount0 = FHE.asEuint256(reserveAmount0);
+                p.aaveAmount0 = FHE.asEuint256(0);
+                emit PreparePositionForWithdrawed(
+                    positionKey,
+                    withdrawnAmount0
+                );
             } catch {
                 p.state = PositionState.AAVE_STUCK;
-                emit PreparePositionForWithdrawalFailed(positionKey, "Token0 withdrawal failed");
+                emit PreparePositionForWithdrawalFailed(
+                    positionKey,
+                    "Token0 withdrawal failed"
+                );
                 return false;
             }
         }
 
         // Withdraw token1 if present
-        if (p.aaveAmount1 > 0) {
-            try Aave.withdraw(asset1, type(uint256).max, address(this)) returns (uint256 withdrawnAmount1) {
-                p.reserveAmount1 += withdrawnAmount1;
-                p.aaveAmount1 = 0;
-                emit PreparePositionForWithdrawed(positionKey, withdrawnAmount1);
+        if (FHE.decrypt(p.aaveAmount1) > 0) {
+            try
+                Aave.withdraw(asset1, type(uint256).max, address(this))
+            returns (uint256 withdrawnAmount1) {
+                uint256 reserveAmount1 = FHE.decrypt(p.reserveAmount1);
+                reserveAmount1 += withdrawnAmount1;
+                p.reserveAmount1 = FHE.asEuint256(reserveAmount1);
+
+                p.aaveAmount1 = FHE.asEuint256(0);
+                emit PreparePositionForWithdrawed(
+                    positionKey,
+                    withdrawnAmount1
+                );
             } catch {
                 p.state = PositionState.AAVE_STUCK;
-                emit PreparePositionForWithdrawalFailed(positionKey, "Token1 withdrawal failed");
+                emit PreparePositionForWithdrawalFailed(
+                    positionKey,
+                    "Token1 withdrawal failed"
+                );
                 return false;
             }
         }
@@ -234,7 +303,8 @@ contract LiquidityOrchestrator is ILiquidityOrchestrator {
     }
 
     /**
-     * @notice Handle post-withdrawal rebalance (called after user withdraws liquidity). To be called by afterRemoveLiquidity hook
+     * @notice Handle post-withdrawal rebalance (called after user withdraws liquidity).
+     * To be called by afterRemoveLiquidity hook
      * @param positionKey The position identifier
      * @param currentTick Current tick after withdrawal
      * @param liqAmount0 Amount of token0 available after user withdrawal
@@ -260,17 +330,22 @@ contract LiquidityOrchestrator is ILiquidityOrchestrator {
             return true;
         }
 
-        p.reserveAmount0 = liqAmount0;
-        p.reserveAmount1 = liqAmount1;
-        p.aaveAmount0 = 0;
-        p.aaveAmount1 = 0;
-        p.totalLiquidity = liqAmount0 + liqAmount1;
+        p.reserveAmount0 = FHE.asEuint256(liqAmount0);
+        p.reserveAmount1 = FHE.asEuint256(liqAmount1);
+        p.aaveAmount0 = FHE.asEuint256(0);
+        p.aaveAmount1 = FHE.asEuint256(0);
+        p.totalLiquidity = FHE.asEuint256(liqAmount0 + liqAmount1);
 
-        bool outOfRange = (currentTick < p.tickLower || currentTick > p.tickUpper);
+        bool outOfRange = (currentTick < p.tickLower ||
+            currentTick > p.tickUpper);
         if (outOfRange && p.state == PositionState.IN_RANGE) {
+            // Decryption initiated
+            uint256 reserveAmount0 = FHE.decrypt(p.reserveAmount0);
+            uint256 reserveAmount1 = FHE.decrypt(p.reserveAmount1);
+
             // Position is out of range and liquidity is in Uniswap - deposit to Aave
-            uint256 amount0ToDeposit = (p.reserveAmount0 * 80) / 100;
-            uint256 amount1ToDeposit = (p.reserveAmount1 * 80) / 100;
+            uint256 amount0ToDeposit = (reserveAmount0 * 80) / 100;
+            uint256 amount1ToDeposit = (reserveAmount1 * 80) / 100;
 
             if (amount0ToDeposit == 0 && amount1ToDeposit == 0) {
                 return true; // Nothing to deposit is there
@@ -280,10 +355,18 @@ contract LiquidityOrchestrator is ILiquidityOrchestrator {
 
             if (amount0ToDeposit > 0) {
                 try Aave.deposit(asset0, amount0ToDeposit, address(this), 0) {
-                    p.reserveAmount0 -= amount0ToDeposit;
-                    p.aaveAmount0 += amount0ToDeposit;
+                    reserveAmount0 -= amount0ToDeposit;
+                    p.reserveAmount0 = FHE.asEuint256(reserveAmount0);
+
+                    uint256 aaveAmount0 = FHE.decrypt(p.aaveAmount0);
+                    aaveAmount0 += amount0ToDeposit;
+                    p.aaveAmount0 = FHE.asEuint256(aaveAmount0);
+
                     depositSuccess = true;
-                    emit PostAddLiquidityDeposited(positionKey, amount0ToDeposit);
+                    emit PostAddLiquidityDeposited(
+                        positionKey,
+                        amount0ToDeposit
+                    );
                 } catch {
                     emit DepositFailed(positionKey, "Token0 deposit failed");
                     depositSuccess = false;
@@ -292,17 +375,27 @@ contract LiquidityOrchestrator is ILiquidityOrchestrator {
 
             if (amount1ToDeposit > 0) {
                 try Aave.deposit(asset1, amount1ToDeposit, address(this), 0) {
-                    p.reserveAmount1 -= amount1ToDeposit;
-                    p.aaveAmount1 += amount1ToDeposit;
+                    reserveAmount1 -= amount1ToDeposit;
+                    p.reserveAmount1 = FHE.asEuint256(reserveAmount1);
+
+                    uint256 aaveAmount1 = FHE.decrypt(p.aaveAmount1);
+                    aaveAmount1 += amount1ToDeposit;
+                    p.aaveAmount1 = FHE.asEuint256(aaveAmount1);
+
                     depositSuccess = true;
-                    emit PostWithdrawalLiquidityDeposited(positionKey, amount1ToDeposit);
+                    emit PostWithdrawalLiquidityDeposited(
+                        positionKey,
+                        amount1ToDeposit
+                    );
                 } catch {
                     emit DepositFailed(positionKey, "Token1 deposit failed");
                     depositSuccess = false;
                 }
             }
 
-            if (depositSuccess && (amount0ToDeposit > 0 || amount1ToDeposit > 0)) {
+            if (
+                depositSuccess && (amount0ToDeposit > 0 || amount1ToDeposit > 0)
+            ) {
                 p.state = PositionState.IN_AAVE;
             }
 
@@ -313,7 +406,8 @@ contract LiquidityOrchestrator is ILiquidityOrchestrator {
     }
 
     /**
-     * @notice Process liquidity addition (called whenever user adds liquidity to position). To be called by afterAddLiquidity hook
+     * @notice Process liquidity addition (called whenever user adds liquidity to position).
+     * To be called by afterAddLiquidity hook
      * @param   positionKey  The position identifier
      * @param   currentTick  The current tick of the position
      * @param   liqAmount0  The amount of token0 being added
@@ -333,13 +427,16 @@ contract LiquidityOrchestrator is ILiquidityOrchestrator {
             revert PositionNotFound();
         }
 
-        bool outOfRange = (currentTick < p.tickLower || currentTick > p.tickUpper);
+        bool outOfRange = (currentTick < p.tickLower ||
+            currentTick > p.tickUpper);
 
         if (outOfRange) {
             // Position is out of range and liquidity is in Uniswap - deposit to Aave
             p.state = PositionState.IN_RANGE;
-            uint256 amount0ToDeposit = (liqAmount0 * (100 - Constant.DEFAULT_RESERVE_PCT)) / 100;
-            uint256 amount1ToDeposit = (liqAmount1 * (100 - Constant.DEFAULT_RESERVE_PCT)) / 100;
+            uint256 amount0ToDeposit = (liqAmount0 *
+                (100 - Constant.DEFAULT_RESERVE_PCT)) / 100;
+            uint256 amount1ToDeposit = (liqAmount1 *
+                (100 - Constant.DEFAULT_RESERVE_PCT)) / 100;
 
             if (amount0ToDeposit == 0 && amount1ToDeposit == 0) {
                 return true; // Nothing to deposit is there
@@ -349,10 +446,19 @@ contract LiquidityOrchestrator is ILiquidityOrchestrator {
 
             if (amount0ToDeposit > 0) {
                 try Aave.deposit(asset0, amount0ToDeposit, address(this), 0) {
-                    p.reserveAmount0 -= amount0ToDeposit;
-                    p.aaveAmount0 += amount0ToDeposit;
+                    uint256 reserveAmount0 = FHE.decrypt(p.reserveAmount0);
+                    reserveAmount0 -= amount0ToDeposit;
+                    p.reserveAmount0 = FHE.asEuint256(reserveAmount0);
+
+                    uint256 aaveAmount0 = FHE.decrypt(p.aaveAmount0);
+                    aaveAmount0 += amount0ToDeposit;
+                    p.aaveAmount0 = FHE.asEuint256(aaveAmount0);
+
                     depositSuccess = true;
-                    emit PostAddLiquidityDeposited(positionKey, amount0ToDeposit);
+                    emit PostAddLiquidityDeposited(
+                        positionKey,
+                        amount0ToDeposit
+                    );
                 } catch {
                     emit DepositFailed(positionKey, "Token0 deposit failed");
                     depositSuccess = false;
@@ -361,17 +467,28 @@ contract LiquidityOrchestrator is ILiquidityOrchestrator {
 
             if (amount1ToDeposit > 0) {
                 try Aave.deposit(asset1, amount1ToDeposit, address(this), 0) {
-                    p.reserveAmount1 -= amount1ToDeposit;
-                    p.aaveAmount1 += amount1ToDeposit;
+                    uint256 reserveAmount1 = FHE.decrypt(p.reserveAmount1);
+                    reserveAmount1 -= amount1ToDeposit;
+                    p.reserveAmount1 = FHE.asEuint256(reserveAmount1);
+
+                    uint256 aaveAmount1 = FHE.decrypt(p.aaveAmount1);
+                    aaveAmount1 += amount1ToDeposit;
+                    p.aaveAmount1 = FHE.asEuint256(aaveAmount1);
+
                     depositSuccess = true;
-                    emit PostWithdrawalLiquidityDeposited(positionKey, amount1ToDeposit);
+                    emit PostWithdrawalLiquidityDeposited(
+                        positionKey,
+                        amount1ToDeposit
+                    );
                 } catch {
                     emit DepositFailed(positionKey, "Token1 deposit failed");
                     depositSuccess = false;
                 }
             }
 
-            if (depositSuccess && (amount0ToDeposit > 0 || amount1ToDeposit > 0)) {
+            if (
+                depositSuccess && (amount0ToDeposit > 0 || amount1ToDeposit > 0)
+            ) {
                 p.state = PositionState.IN_AAVE;
             }
 
@@ -385,7 +502,9 @@ contract LiquidityOrchestrator is ILiquidityOrchestrator {
      * @notice Get available liquidity for a position (Uniswap + Aave)
      */
 
-    function getAvailableLiquidity(bytes32 positionKey)
+    function getAvailableLiquidity(
+        bytes32 positionKey
+    )
         external
         view
         returns (uint256 amount0, uint256 amount1, PositionState state)
@@ -394,20 +513,32 @@ contract LiquidityOrchestrator is ILiquidityOrchestrator {
         if (!p.exists) {
             revert PositionNotFound();
         }
-        return (p.reserveAmount0 + p.aaveAmount0, p.reserveAmount1 + p.aaveAmount1, p.state);
+        uint256 Amount0 = FHE.decrypt(p.reserveAmount0) +
+            FHE.decrypt(p.aaveAmount0);
+        uint256 Amount1 = FHE.decrypt(p.reserveAmount1) +
+            FHE.decrypt(p.aaveAmount1);
+
+        return (Amount0, Amount1, p.state);
     }
 
     // Position management functions
-    function upsertPosition(bytes32 positionKey, PositionData calldata data) external override {
+    function upsertPosition(
+        bytes32 positionKey,
+        PositionData calldata data
+    ) external override {
         positions[positionKey] = data;
         emit PositionUpserted(positionKey);
     }
 
-    function getPosition(bytes32 positionKey) external view returns (PositionData memory) {
+    function getPosition(
+        bytes32 positionKey
+    ) external view returns (PositionData memory) {
         return positions[positionKey];
     }
 
-    function isPositionExists(bytes32 positionKey) external view returns (bool) {
+    function isPositionExists(
+        bytes32 positionKey
+    ) external view returns (bool) {
         return positions[positionKey].exists;
     }
 
