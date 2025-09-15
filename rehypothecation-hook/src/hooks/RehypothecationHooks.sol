@@ -14,8 +14,9 @@ import {SwapParams, ModifyLiquidityParams} from "v4-core/types/PoolOperation.sol
 import {StateLibrary} from "v4-core/libraries/StateLibrary.sol";
 import {euint256, FHE, ebool} from "@fhenixprotocol/contracts/FHE.sol";
 
+import {FHE} from "lib/cofhe-contracts/contracts/FHE.sol";
+
 import {LiquidityOrchestrator} from "../LiquidityOrchestrator.sol";
-import {IAave} from "../interfaces/IAave.sol";
 
 import {Constant} from "../utils/Constant.sol";
 
@@ -35,20 +36,17 @@ contract RehypothecationHooks is BaseHook {
     IAave public immutable aavePool;
     ILiquidityOrchestrator public immutable liquidityOrchestrator;
     int24 public lastActiveTick;
+    mapping(bytes32 => ebool) private encryptedWithdrawalNeeded;
+    mapping(bytes32 => euint32) private encryptedTimestamp;
 
     // Owner
     address public owner;
 
     // Events
-    event HookInitialized(
-        address indexed poolManager,
-        address indexed aavePool
-    );
-    event ReservePercentageUpdated(
-        bytes32 indexed positionKey,
-        uint256 oldPercentage,
-        uint256 newPercentage
-    );
+    event HookInitialized(address indexed poolManager, address indexed aavePool);
+    event ReservePercentageUpdated(bytes32 indexed positionKey, uint256 oldPercentage, uint256 newPercentage);
+    event EncryptedLiquiditySignal(bytes32 indexed positionKey, bytes encryptedSignal);
+    event EncryptedWithdrawalPrepared(bytes32 indexed positionKey, bytes encryptedAmount);
 
     // Custom Errors
     error LiquidityAdditionFailed();
@@ -56,6 +54,7 @@ contract RehypothecationHooks is BaseHook {
     error PostWithdrawalRebalanceFailed();
     error PreSwapLiquidityPreparationFailed();
     error PostSwapManagementFailed();
+    error DecryptionFailed();
 
     modifier onlyOwner() {
         require(msg.sender == owner, " Only Owner");
@@ -109,8 +108,44 @@ contract RehypothecationHooks is BaseHook {
     }
 
     /**
-     * @notice  Will perform liquidity management after liquidity is added to a pool, either creating a new
-     *          position or updating an existing one.
+     * @notice  Decrypts the hook data to extract lower and upper ticks.
+     * @param   hookData  The encrypted or plain hook data.
+     * @return  lowerTick  lower tick.
+     * @return  upperTick  upper tick.
+     */
+    function _decryptHookData(bytes calldata hookData) internal returns (int24 lowerTick, int24 upperTick) {
+        if (hookData.length == 0) {
+            revert DecryptionFailed();
+        }
+
+        bool isEncrypted = hookData[0] == 0x01;
+        if (isEncrypted) {
+            // Extract encrypted data (skip first flag byte)
+            bytes memory encryptedData = hookData[1:];
+
+            // Decode the encrypted ticks to the einput type
+            (einput memory encLowerTick, einput memory encUpperTick) = abi.decode(encryptedData, (einput, einput));
+
+            // This will convert einput to euint32
+            euint32 lowerTickEnc = FHE.asEuint32(encLowerTick);
+            euint32 upperTickEnc = FHE.asEuint32(encUpperTick);
+
+            // Decrypt the values (these are offset values to handle negatives)
+            uint32 lowerTickOffset = FHE.decrypt(lowerTickEnc);
+            uint32 upperTickOffset = FHE.decrypt(upperTickEnc);
+
+            // Convert back to signed ticks by removing the offset
+            // Offset = 2^23 = 8,388,608 (allows range from -8,388,608 to +8,388,607)
+            uint32 TICK_OFFSET = 8388608;
+            lowerTick = int24(int32(lowerTickOffset) - int32(TICK_OFFSET));
+            upperTick = int24(int32(upperTickOffset) - int32(TICK_OFFSET));
+        } else {
+            (lowerTick, upperTick) = abi.decode(hookData, (int24, int24));
+        }
+    }
+
+    /**
+     * @notice  Will perform liquidity management after liquidity is added to a pool, either creating a new position or updating an existing one.
      * @param   key  The pool key
      * @param   params  The parameters for modifying liquidity
      * @param   delta  The change in balance
@@ -124,13 +159,8 @@ contract RehypothecationHooks is BaseHook {
         BalanceDelta,
         bytes calldata hookData
     ) internal override returns (bytes4 selector, BalanceDelta returnedDelta) {
-        // Generate position key from pool key and sender
-        // (, int24 currentTick,,) = ISlot0(address(poolManager)).getSlot0(key.toId());
-        (int24 lowerTick, int24 upperTick) = abi.decode(
-            hookData,
-            (int24, int24)
-        );
-        (, int24 currentTick, , ) = poolManager.getSlot0(key.toId());
+        (int24 lowerTick, int24 upperTick) = _decryptHookData(hookData);
+        (, int24 currentTick,,) = poolManager.getSlot0(key.toId());
 
         bytes32 positionKey = _generatePositionKey(
             key,
@@ -339,31 +369,45 @@ contract RehypothecationHooks is BaseHook {
     {
         // Fetching current tick from pool manager
         (, int24 currentTick, , ) = poolManager.getSlot0(key.toId());
+        
+        // Encrypt current tick for privacy
+        euint32 encryptedCurrentTick = FHE.asEuint32(uint32(int32(currentTick)));
+        encryptedLastActiveTicks[positionKey] = encryptedCurrentTick;
 
-        (int24 lowerTick, int24 upperTick) = abi.decode(
-            hookData,
-            (int24, int24)
-        );
+        (int24 lowerTick, int24 upperTick) = _decryptHookData(hookData);
+
         bytes32 positionKey = _generatePositionKey(key, lowerTick, upperTick);
 
-        // Encrypt current tick for privacy
-    euint32 encryptedCurrentTick = FHE.asEuint32(uint32(int32(currentTick)));
-    encryptedLastActiveTicks[positionKey] = encryptedCurrentTick;
+        // Always emit encrypted signal
+        ebool encryptedNeedsWithdrawal = FHE.asEbool(true);
+        euint32 encryptedTime = FHE.asEuint32(uint32(block.timestamp));
+
+        bytes memory encryptedSignal =
+            abi.encode(FHE.sealoutput(encryptedNeedsWithdrawal, msg.sender), FHE.sealoutput(encryptedTime, msg.sender));
+
+        emit EncryptedLiquiditySignal(positionKey, encryptedSignal);
+
+        // check actual needs withdrawal
+        bool actualNeedsWithdrawal = liquidityOrchestrator.checkPreSwapLiquidityNeeds(positionKey, currentTick);
+
 
         address token0 = Currency.unwrap(key.currency0);
         address token1 = Currency.unwrap(key.currency1);
 
         // Call LiquidityOrchestrator to prepare pre-swap liquidity
-        bool success = liquidityOrchestrator.preparePreSwapLiquidity(
-            positionKey,
-            currentTick, // This currentTick is used here.
-            token0,
-            token1
-        );
+        if (actualNeedsWithdrawal) {
+            // Real withdrawal
+            bool success = liquidityOrchestrator.preparePreSwapLiquidity(positionKey, currentTick, token0, token1);
 
-        if (!success) {
-            revert PreSwapLiquidityPreparationFailed();
+            if (!success) {
+                revert PreSwapLiquidityPreparationFailed();
+            }
         }
+
+        // Always emit success signal
+        euint32 encryptedSuccess = FHE.asEuint32(1);
+        bytes memory encryptedResult = abi.encode(FHE.sealoutput(encryptedSuccess, msg.sender));
+        emit EncryptedWithdrawalPrepared(positionKey, encryptedResult);
 
         lastActiveTick = currentTick;
 
@@ -381,10 +425,8 @@ contract RehypothecationHooks is BaseHook {
         // (, int24 newTick,,) = ISlot0(address(poolManager)).getSlot0(key.toId());
         (, int24 newTick, , ) = poolManager.getSlot0(key.toId());
 
-        (int24 lowerTick, int24 upperTick) = abi.decode(
-            hookData,
-            (int24, int24)
-        );
+        (int24 lowerTick, int24 upperTick) = _decryptHookData(hookData);
+
         bytes32 positionKey = _generatePositionKey(key, lowerTick, upperTick);
 
         // Encrypt tick values for privacy
@@ -398,6 +440,12 @@ contract RehypothecationHooks is BaseHook {
         ILiquidityOrchestrator.PositionData memory p = liquidityOrchestrator.getPosition(positionKey);
          // Encrypt swap direction and amounts
     ebool isZeroForOne = FHE.asEbool(params.zeroForOne);
+
+        bool shouldRebalance = liquidityOrchestrator.checkPostSwapLiquidityNeeds(positionKey, oldTick, newTick);
+        ebool encryptedShouldRebalance = FHE.asEbool(shouldRebalance);
+
+        euint32 encryptedAmount0Delta;
+        euint32 encryptedAmount1Delta;
 
         if (params.zeroForOne) {
             // token0 -> token1
@@ -429,6 +477,16 @@ contract RehypothecationHooks is BaseHook {
             p.reserveAmount0 = FHE.asEuint256(reserveAmount0);
         }
 
+        //  Emit encrypted post-swap decision signal
+        bytes memory encryptedRebalanceSignal = abi.encode(
+            FHE.sealoutput(encryptedShouldRebalance, msg.sender),
+            FHE.sealoutput(encryptedAmount0Delta, msg.sender),
+            FHE.sealoutput(encryptedAmount1Delta, msg.sender),
+            FHE.sealoutput(FHE.asEuint32(uint32(block.timestamp)), msg.sender)
+        );
+
+        emit EncryptedRebalancingDecision(positionKey, encryptedRebalanceSignal);
+
         address token0 = Currency.unwrap(key.currency0);
         address token1 = Currency.unwrap(key.currency1);
 
@@ -443,6 +501,12 @@ contract RehypothecationHooks is BaseHook {
         if (!success) {
             revert PostSwapManagementFailed();
         }
+
+        // Always emit success signal regardless of whether rebalancing was needed, to prevent MEV analysis
+        euint32 encryptedSuccessSignal = FHE.asEuint32(1);
+        bytes memory encryptedResult = abi.encode(FHE.sealoutput(encryptedSuccessSignal, msg.sender));
+        emit EncryptedPostSwapCompleted(positionKey, encryptedResult);
+
         return (this.afterSwap.selector, 0);
     }
 

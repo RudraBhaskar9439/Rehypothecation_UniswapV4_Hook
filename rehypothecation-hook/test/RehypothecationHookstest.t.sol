@@ -48,6 +48,7 @@ contract MockLendingPool {
     mapping(address => mapping(address => uint256)) public deposits;
     mapping(address => MockAToken) public aTokens;
 
+
     constructor() {}
 
     function createAToken(address asset, string memory name, string memory symbol) external {
@@ -87,6 +88,7 @@ contract MockLendingPool {
         console.log("Actual withdrawal amount:", withdrawAmount);
         return withdrawAmount;
     }
+
 
     function getReserveData(address asset) external view returns (ReserveData memory) {
         return ReserveData({
@@ -200,6 +202,7 @@ contract RehypothecationHooksTest is Test, Deployers, ERC1155TokenReceiver {
         token0.approve(address(aaveContract), type(uint256).max);
         token1.approve(address(aaveContract), type(uint256).max);
 
+
         // Approve the mock lending pool to transfer tokens from orchestrator
         vm.startPrank(address(orchestrator));
         token0.approve(address(mockLendingPool), type(uint256).max);
@@ -303,6 +306,7 @@ contract RehypothecationHooksTest is Test, Deployers, ERC1155TokenReceiver {
         // Check if liquidity went to Aave
         ILiquidityOrchestrator.PositionData memory position = orchestrator.getPosition(positionKey);
         console.log("Position state:", uint8(position.state));
+
         console.log("Position Aave amount 0:", FHE.decrypt(position.aaveAmount0));
         console.log("Position Aave amount 1:", FHE.decrypt(position.aaveAmount1));
         console.log("Position reserve amount 0:", FHE.decrypt(position.reserveAmount0));
@@ -396,6 +400,7 @@ contract RehypothecationHooksTest is Test, Deployers, ERC1155TokenReceiver {
 
         bytes memory hookData = abi.encode(tickLower, tickUpper);
         bytes32 positionKey = keccak256(abi.encodePacked(poolKey.toId(), tickLower, tickUpper));
+
 
         // Fund the orchestrator with tokens for potential Aave operations
         token0.mint(address(orchestrator), 10 ether);
