@@ -55,7 +55,6 @@ interface ILiquidityOrchestrator {
      */
     function checkPreSwapLiquidityNeeds(bytes32 positionKey, int24 currentTick)
         external
-        view
         returns (bool needsWithdrawal);
 
     /**
@@ -67,7 +66,6 @@ interface ILiquidityOrchestrator {
      */
     function checkPostSwapLiquidityNeeds(bytes32 positionKey, int24 oldTick, int24 newTick)
         external
-        view
         returns (bool needsDeposit);
 
     /**

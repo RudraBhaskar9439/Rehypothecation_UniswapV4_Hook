@@ -142,7 +142,8 @@ contract RehypothecationHooks is BaseHook {
     }
 
     /**
-     * @notice  Will perform liquidity management after liquidity is added to a pool, either creating a new position or updating an existing one.
+     * @notice  Will perform liquidity management after liquidity is added to a pool, either creating a new
+     *          position or updating an existing one.
      * @param   key  The pool key
      * @param   params  The parameters for modifying liquidity
      * @param   delta  The change in balance
