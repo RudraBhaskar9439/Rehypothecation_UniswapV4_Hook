@@ -15,6 +15,7 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
+    "@fhenixprotocol/cofhe-contracts": "^0.0.13",
     "@fhenixprotocol/contracts": "^0.3.1",
     "fhenixjs": "^0.4.1"
   }

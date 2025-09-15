@@ -1,7 +1,6 @@
 @ensdomains/=lib/v4-periphery/lib/v4-core/node_modules/@ensdomains/
 @openzeppelin/=lib/v4-periphery/lib/v4-core/lib/openzeppelin-contracts/
 @uniswap/v4-core/=lib/v4-periphery/lib/v4-core/
-@fhenixprotocol/contracts/=lib/fhenix-contracts/contracts
 ds-test/=lib/v4-periphery/lib/v4-core/lib/forge-std/lib/ds-test/src/
 erc4626-tests/=lib/v4-periphery/lib/v4-core/lib/openzeppelin-contracts/lib/erc4626-tests/
 forge-gas-snapshot/=lib/v4-periphery/lib/permit2/lib/forge-gas-snapshot/src/
@@ -12,3 +11,4 @@ permit2/=lib/v4-periphery/lib/permit2/
 solmate/=lib/v4-periphery/lib/v4-core/lib/solmate/
 v4-core/=lib/v4-periphery/lib/v4-core/src/
 v4-periphery/=lib/v4-periphery/
+@fhenixprotocol/cofhe-contracts/=node_modules/@fhenixprotocol/cofhe-contracts/
