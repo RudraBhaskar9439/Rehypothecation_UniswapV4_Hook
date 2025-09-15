@@ -311,7 +311,11 @@ contract LiquidityOrchestrator is ILiquidityOrchestrator {
 
         if (amount0ToDeposit > 0) {
             try Aave.deposit(asset0, amount0ToDeposit, address(this), 0) {
-                reserveAmount0 -= amount0ToDeposit;
+                if (reserveAmount0 >= amount0ToDeposit) {
+                    reserveAmount0 -= amount0ToDeposit;
+                } else {
+                    reserveAmount0 = 0;
+                }
                 p.reserveAmount0 = FHE.asEuint256(reserveAmount0);
 
                 (uint256 aaveAmount0, ) = FHE.getDecryptResultSafe(
@@ -330,7 +334,11 @@ contract LiquidityOrchestrator is ILiquidityOrchestrator {
 
         if (amount1ToDeposit > 0) {
             try Aave.deposit(asset1, amount1ToDeposit, address(this), 0) {
-                reserveAmount1 -= amount1ToDeposit;
+                if (reserveAmount1 >= amount1ToDeposit) {
+                    reserveAmount1 -= amount1ToDeposit;
+                } else {
+                    reserveAmount1 = 0;
+                }
                 p.reserveAmount1 = FHE.asEuint256(reserveAmount1);
 
                 (uint256 aaveAmount1, ) = FHE.getDecryptResultSafe(
@@ -522,7 +530,11 @@ contract LiquidityOrchestrator is ILiquidityOrchestrator {
 
             if (amount0ToDeposit > 0) {
                 try Aave.deposit(asset0, amount0ToDeposit, address(this), 0) {
-                    reserveAmount0 -= amount0ToDeposit;
+                    if (reserveAmount0 >= amount0ToDeposit) {
+                        reserveAmount0 -= amount0ToDeposit;
+                    } else {
+                        reserveAmount0 = 0;
+                    }
                     p.reserveAmount0 = FHE.asEuint256(reserveAmount0);
 
                     (uint256 aaveAmount0, ) = FHE.getDecryptResultSafe(
@@ -621,7 +633,11 @@ contract LiquidityOrchestrator is ILiquidityOrchestrator {
                     (uint256 reserveAmount0, ) = FHE.getDecryptResultSafe(
                         p.reserveAmount0
                     );
-                    reserveAmount0 -= amount0ToDeposit;
+                    if (reserveAmount0 >= amount0ToDeposit) {
+                        reserveAmount0 -= amount0ToDeposit;
+                    } else {
+                        reserveAmount0 = 0;
+                    }
                     p.reserveAmount0 = FHE.asEuint256(reserveAmount0);
 
                     (uint256 aaveAmount0, ) = FHE.getDecryptResultSafe(

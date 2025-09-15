@@ -47,7 +47,6 @@ contract MockAToken is MockERC20 {
 }
 
 // Mock LendingPool for testing
-// Mock LendingPool for testing
 contract MockLendingPool {
     mapping(address => mapping(address => uint256)) public deposits;
     mapping(address => MockAToken) public aTokens;
@@ -95,7 +94,6 @@ contract MockLendingPool {
         }
 
         // Update deposits to reflect the withdrawal
-        // Note: deposits should track the aToken balance, not just initial deposits
         deposits[to][asset] = aTokenBalance - withdrawAmount;
 
         // Burn aTokens
@@ -241,6 +239,13 @@ contract RehypothecationHooksTest is Test, Deployers, ERC1155TokenReceiver {
         poolKey = key;
     }
 
+    // Helper function to format hook data properly with a 0x00 prefix for plaintext
+    function _formatHookData(
+        bytes memory data
+    ) internal pure returns (bytes memory) {
+        return abi.encodePacked(bytes1(0x00), data);
+    }
+
     function test_AddLiquidity() public {
         // Add liquidity to the pool
         int24 tickLower = -60;
@@ -260,7 +265,9 @@ contract RehypothecationHooksTest is Test, Deployers, ERC1155TokenReceiver {
             amount1Desired
         );
 
-        bytes memory hookData = abi.encode(tickLower, tickUpper);
+        // Format hook data with 0x00 prefix
+        bytes memory rawData = abi.encode(tickLower, tickUpper);
+        bytes memory formattedHookData = _formatHookData(rawData);
 
         // Call modifyLiquidity - this will trigger the afterAddLiquidity hook
         modifyLiquidityRouter.modifyLiquidity(
@@ -271,7 +278,7 @@ contract RehypothecationHooksTest is Test, Deployers, ERC1155TokenReceiver {
                 liquidityDelta: int256(uint256(liquidity)),
                 salt: bytes32(0)
             }),
-            hookData
+            formattedHookData
         );
         console.log("Added liquidity");
 
@@ -305,7 +312,6 @@ contract RehypothecationHooksTest is Test, Deployers, ERC1155TokenReceiver {
         // Get current tick
         (, int24 currentTick, , ) = manager.getSlot0(poolKey.toId());
         console.log("Current tick:", currentTick);
-        // get tick spacing
 
         // Add liquidity well above current range (out of range)
         int24 tickLower = currentTick + 120;
@@ -326,7 +332,9 @@ contract RehypothecationHooksTest is Test, Deployers, ERC1155TokenReceiver {
         );
         console.log("Calculated out of range liquidity:", liquidity);
 
-        bytes memory hookData = abi.encode(tickLower, tickUpper);
+        // Format hook data with 0x00 prefix
+        bytes memory rawData = abi.encode(tickLower, tickUpper);
+        bytes memory formattedHookData = _formatHookData(rawData);
 
         // Fund the orchestrator with tokens for Aave deposits
         token0.mint(address(orchestrator), 10 ether);
@@ -341,7 +349,7 @@ contract RehypothecationHooksTest is Test, Deployers, ERC1155TokenReceiver {
                 liquidityDelta: int256(uint256(liquidity)),
                 salt: bytes32(0)
             }),
-            hookData
+            formattedHookData
         );
         console.log("Added out of range liquidity");
 
@@ -387,7 +395,9 @@ contract RehypothecationHooksTest is Test, Deployers, ERC1155TokenReceiver {
             1 ether
         );
 
-        bytes memory hookData = abi.encode(tickLower, tickUpper);
+        bytes memory rawData = abi.encode(tickLower, tickUpper);
+        bytes memory formattedHookData = _formatHookData(rawData);
+
         bytes32 positionKey = keccak256(
             abi.encodePacked(poolKey.toId(), tickLower, tickUpper)
         );
@@ -397,7 +407,7 @@ contract RehypothecationHooksTest is Test, Deployers, ERC1155TokenReceiver {
         token1.mint(address(orchestrator), 10 ether);
 
         // Add liquidity first
-        _addLiquidity(tickLower, tickUpper, liquidity, hookData);
+        _addLiquidity(tickLower, tickUpper, liquidity, formattedHookData);
 
         // Verify funds are in Aave
         ILiquidityOrchestrator.PositionData memory positionBefore = orchestrator
@@ -420,7 +430,7 @@ contract RehypothecationHooksTest is Test, Deployers, ERC1155TokenReceiver {
         uint256 balanceBefore1 = token1.balanceOf(address(this));
 
         // Remove liquidity
-        _removeLiquidity(tickLower, tickUpper, liquidity, hookData);
+        _removeLiquidity(tickLower, tickUpper, liquidity, formattedHookData);
 
         // Check balances increased
         assertTrue(
@@ -494,7 +504,9 @@ contract RehypothecationHooksTest is Test, Deployers, ERC1155TokenReceiver {
             amount1Desired
         );
 
-        bytes memory hookData = abi.encode(tickLower, tickUpper);
+        bytes memory rawData = abi.encode(tickLower, tickUpper);
+        bytes memory formattedHookData = _formatHookData(rawData);
+
         bytes32 positionKey = keccak256(
             abi.encodePacked(poolKey.toId(), tickLower, tickUpper)
         );
@@ -503,7 +515,7 @@ contract RehypothecationHooksTest is Test, Deployers, ERC1155TokenReceiver {
         token0.mint(address(orchestrator), 10 ether);
         token1.mint(address(orchestrator), 10 ether);
 
-        _addLiquidity(tickLower, tickUpper, liquidity, hookData);
+        _addLiquidity(tickLower, tickUpper, liquidity, formattedHookData);
 
         // 2. Check position is in range and not in Aave
         ILiquidityOrchestrator.PositionData memory positionBefore = orchestrator
@@ -538,15 +550,7 @@ contract RehypothecationHooksTest is Test, Deployers, ERC1155TokenReceiver {
         });
 
         // Perform the swap (triggers hooks)
-        swapRouter.swap(
-            poolKey,
-            swapParams,
-            PoolSwapTest.TestSettings({
-                takeClaims: false,
-                settleUsingBurn: false
-            }),
-            hookData
-        );
+        _performSwap(poolKey, swapParams, formattedHookData);
 
         // 4. Check tick is now out of range
         int24 newTick = _getTickFromPoolManager(poolKey);
@@ -610,15 +614,17 @@ contract RehypothecationHooksTest is Test, Deployers, ERC1155TokenReceiver {
             1 ether
         );
 
-        bytes memory hookData = abi.encode(tickLower, tickUpper);
+        bytes memory rawData = abi.encode(tickLower, tickUpper);
+        bytes memory formattedHookData = _formatHookData(rawData);
+
         bytes32 positionKey = keccak256(
             abi.encodePacked(poolKey.toId(), tickLower, tickUpper)
         );
 
-        _addLiquidity(tickLower, tickUpper, liquidity, hookData);
+        _addLiquidity(tickLower, tickUpper, liquidity, formattedHookData);
 
         // Remove all liquidity
-        _removeLiquidity(tickLower, tickUpper, liquidity, hookData);
+        _removeLiquidity(tickLower, tickUpper, liquidity, formattedHookData);
 
         // Check position after removal
         ILiquidityOrchestrator.PositionData memory positionAfter = orchestrator
@@ -672,12 +678,15 @@ contract RehypothecationHooksTest is Test, Deployers, ERC1155TokenReceiver {
             amount0Desired,
             amount1Desired
         );
-        bytes memory hookData = abi.encode(tickLower, tickUpper);
+
+        bytes memory rawData = abi.encode(tickLower, tickUpper);
+        bytes memory formattedHookData = _formatHookData(rawData);
+
         bytes32 positionKey = keccak256(
             abi.encodePacked(poolKey.toId(), tickLower, tickUpper)
         );
 
-        _addLiquidity(tickLower, tickUpper, liquidity, hookData);
+        _addLiquidity(tickLower, tickUpper, liquidity, formattedHookData);
 
         ILiquidityOrchestrator.PositionData
             memory positionBeforeSwap = orchestrator.getPosition(positionKey);
@@ -720,7 +729,7 @@ contract RehypothecationHooksTest is Test, Deployers, ERC1155TokenReceiver {
         int24 oldTick = _getTickFromPoolManager(poolKey);
         console.log("Old tick before swap:", oldTick);
 
-        _performSwap(poolKey, swapParams, hookData);
+        _performSwap(poolKey, swapParams, formattedHookData);
 
         int24 newTick = _getTickFromPoolManager(poolKey);
         console.log("New tick after swap:", newTick);
@@ -777,7 +786,6 @@ contract RehypothecationHooksTest is Test, Deployers, ERC1155TokenReceiver {
         SwapParams memory _swapParams,
         bytes memory _hookData
     ) internal {
-        // The modifyLiquidityRouter's swap function will trigger the hooks
         swapRouter.swap(
             _poolKey,
             _swapParams,
