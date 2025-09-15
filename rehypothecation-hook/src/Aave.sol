@@ -1,7 +1,7 @@
 //SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import {IAave} from "./interfaces/IAave.sol";
+import {IAave, ReserveData} from "./interfaces/IAave.sol";
 
 interface IERC20 {
     function approve(address spender, uint256 amount) external returns (bool);
@@ -11,6 +11,13 @@ interface ILendingPool {
     function supply(address asset, uint256 amount, address onBehalfOf, uint16 referralCode) external;
 
     function withdraw(address asset, uint256 amount, address to) external returns (uint256);
+
+    /**
+     * @dev Gets the reserve data for an asset
+     * @param asset The address of the underlying asset
+     * @return The reserve data including aToken address
+     */
+    function getReserveData(address asset) external view returns (ReserveData memory);
 }
 
 contract Aave is IAave {
@@ -37,5 +44,17 @@ contract Aave is IAave {
         }
         uint256 withdrawn = aave.withdraw(asset, amount, to);
         return withdrawn;
+    }
+
+    /**
+     * @dev Gets the reserve data for an asset from the underlying Aave lending pool
+     * @param asset The address of the underlying asset
+     * @return The reserve data including aToken address
+     */
+    function getReserveData(address asset) external view returns (ReserveData memory) {
+        if (asset == address(0)) {
+            revert InvalidInput();
+        }
+        return aave.getReserveData(asset);
     }
 }
