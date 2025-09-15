@@ -6,7 +6,7 @@ import {console} from "forge-std/console.sol";
 import {Deployers} from "@uniswap/v4-core/test/utils/Deployers.sol";
 import {PoolSwapTest} from "v4-core/test/PoolSwapTest.sol";
 import {MockERC20} from "solmate/src/test/utils/mocks/MockERC20.sol";
-
+import {euint256, FHE, ebool} from "@fhenixprotocol/contracts/FHE.sol";
 import {PoolManager} from "v4-core/PoolManager.sol";
 import {SwapParams, ModifyLiquidityParams} from "v4-core/types/PoolOperation.sol";
 import {IPoolManager} from "v4-core/interfaces/IPoolManager.sol";
@@ -29,22 +29,90 @@ import "forge-std/console.sol";
 import {RehypothecationHooks} from "../src/hooks/RehypothecationHooks.sol";
 import {Aave} from "../src/Aave.sol";
 import {LiquidityOrchestrator} from "../src/LiquidityOrchestrator.sol";
-import {IAave} from "../src/interfaces/IAave.sol";
+import {IAave, ReserveData} from "../src/interfaces/IAave.sol";
 import {ILiquidityOrchestrator} from "../src/interfaces/ILiquidityOrchestrator.sol";
 import {Constant} from "../src/utils/Constant.sol";
 
+// Mock aToken that represents Aave interest-bearing tokens
+contract MockAToken is MockERC20 {
+    address public underlyingAsset;
+
+    constructor(string memory name, string memory symbol, address _underlyingAsset) MockERC20(name, symbol, 18) {
+        underlyingAsset = _underlyingAsset;
+    }
+}
+
+// Mock LendingPool for testing
 // Mock LendingPool for testing
 contract MockLendingPool {
     mapping(address => mapping(address => uint256)) public deposits;
+    mapping(address => MockAToken) public aTokens;
+
+
+    constructor() {}
+
+    function createAToken(address asset, string memory name, string memory symbol) external {
+        aTokens[asset] = new MockAToken(name, symbol, asset);
+    }
 
     function supply(address asset, uint256 amount, address onBehalfOf, uint16) external {
         deposits[onBehalfOf][asset] += amount;
+        // Mint aTokens to represent the deposit (1:1 ratio for simplicity)
+        aTokens[asset].mint(onBehalfOf, amount);
     }
 
     function withdraw(address asset, uint256 amount, address to) external returns (uint256) {
-        require(deposits[to][asset] >= amount, "Not enough balance");
-        deposits[to][asset] -= amount;
-        return amount;
+        // Get the current aToken balance to determine actual withdrawable amount
+        uint256 aTokenBalance = aTokens[asset].balanceOf(to);
+        uint256 withdrawAmount;
+
+        console.log("Current aToken balance:", aTokenBalance);
+        console.log("Deposits mapping balance:", deposits[to][asset]);
+        console.log("Requested withdrawal amount:", amount);
+
+        if (amount == type(uint256).max) {
+            require(aTokenBalance > 0, "Not enough balance");
+            withdrawAmount = aTokenBalance;
+        } else {
+            require(aTokenBalance >= amount, "Not enough balance");
+            withdrawAmount = amount;
+        }
+
+        // Update deposits to reflect the withdrawal
+        // Note: deposits should track the aToken balance, not just initial deposits
+        deposits[to][asset] = aTokenBalance - withdrawAmount;
+
+        // Burn aTokens
+        aTokens[asset].burn(to, withdrawAmount);
+
+        console.log("Actual withdrawal amount:", withdrawAmount);
+        return withdrawAmount;
+    }
+
+
+    function getReserveData(address asset) external view returns (ReserveData memory) {
+        return ReserveData({
+            liquidityIndex: 0,
+            currentLiquidityRate: 0,
+            variableBorrowIndex: 0,
+            currentVariableBorrowRate: 0,
+            currentStableBorrowRate: 0,
+            lastUpdateTimestamp: 0,
+            id: 0,
+            aTokenAddress: address(aTokens[asset]),
+            stableDebtTokenAddress: address(0),
+            variableDebtTokenAddress: address(0),
+            interestRateStrategyAddress: address(0),
+            accruedToTreasury: 0,
+            unbacked: 0,
+            isolationModeTotalDebt: 0
+        });
+    }
+
+    // Helper function to simulate yield by updating deposits mapping
+    function simulateYield(address asset, address user, uint256 yieldAmount) external {
+        deposits[user][asset] += yieldAmount;
+        aTokens[asset].mint(user, yieldAmount);
     }
 }
 
@@ -93,6 +161,10 @@ contract RehypothecationHooksTest is Test, Deployers, ERC1155TokenReceiver {
         // Deploy mock lending pool
         mockLendingPool = new MockLendingPool();
 
+        // Create aTokens for the underlying assets
+        mockLendingPool.createAToken(address(token0), "aToken0", "aTKN0");
+        mockLendingPool.createAToken(address(token1), "aToken1", "aTKN1");
+
         // Deploy Aave contract
         aaveContract = new Aave(address(mockLendingPool));
 
@@ -129,6 +201,13 @@ contract RehypothecationHooksTest is Test, Deployers, ERC1155TokenReceiver {
         // Also approve the Aave contract
         token0.approve(address(aaveContract), type(uint256).max);
         token1.approve(address(aaveContract), type(uint256).max);
+
+
+        // Approve the mock lending pool to transfer tokens from orchestrator
+        vm.startPrank(address(orchestrator));
+        token0.approve(address(mockLendingPool), type(uint256).max);
+        token1.approve(address(mockLendingPool), type(uint256).max);
+        vm.stopPrank();
 
         (key,) = initPool(currency0, currency1, hook, 3000, SQRT_PRICE_1_1);
         poolKey = key;
@@ -203,6 +282,10 @@ contract RehypothecationHooksTest is Test, Deployers, ERC1155TokenReceiver {
 
         bytes memory hookData = abi.encode(tickLower, tickUpper);
 
+        // Fund the orchestrator with tokens for Aave deposits
+        token0.mint(address(orchestrator), 10 ether);
+        token1.mint(address(orchestrator), 10 ether);
+
         // Add out of range liquidity
         modifyLiquidityRouter.modifyLiquidity(
             poolKey,
@@ -223,13 +306,20 @@ contract RehypothecationHooksTest is Test, Deployers, ERC1155TokenReceiver {
         // Check if liquidity went to Aave
         ILiquidityOrchestrator.PositionData memory position = orchestrator.getPosition(positionKey);
         console.log("Position state:", uint8(position.state));
-        console.log("Position Aave amount 0:", position.aaveAmount0);
-        console.log("Position Aave amount 1:", position.aaveAmount1);
-        console.log("Position reserve amount 0:", position.reserveAmount0);
-        console.log("Position reserve amount 1:", position.reserveAmount1);
-        console.log("Position liquidity:", position.totalLiquidity);
-        assertTrue(position.state == ILiquidityOrchestrator.PositionState.IN_AAVE, "Position should be in Aave");
-        assertTrue(position.aaveAmount0 > 0 || position.aaveAmount1 > 0, "No liquidity in Aave");
+
+        console.log("Position Aave amount 0:", FHE.decrypt(position.aaveAmount0));
+        console.log("Position Aave amount 1:", FHE.decrypt(position.aaveAmount1));
+        console.log("Position reserve amount 0:", FHE.decrypt(position.reserveAmount0));
+        console.log("Position reserve amount 1:", FHE.decrypt(position.reserveAmount1));
+        console.log("Position liquidity:", FHE.decrypt(position.totalLiquidity));
+        assertTrue(
+            position.state == ILiquidityOrchestrator.PositionState.IN_AAVE,
+            "Position should be in Aave"
+        );
+        assertTrue(
+            position.aaveAmount0 > 0 || position.aaveAmount1 > 0,
+            "No liquidity in Aave"
+        );
     }
 
     function test_removeLiquidityOutOfRange() public {
@@ -249,6 +339,10 @@ contract RehypothecationHooksTest is Test, Deployers, ERC1155TokenReceiver {
 
         bytes memory hookData = abi.encode(tickLower, tickUpper);
         bytes32 positionKey = keccak256(abi.encodePacked(poolKey.toId(), tickLower, tickUpper));
+
+        // Fund the orchestrator with tokens for Aave deposits
+        token0.mint(address(orchestrator), 10 ether);
+        token1.mint(address(orchestrator), 10 ether);
 
         // Add liquidity first
         _addLiquidity(tickLower, tickUpper, liquidity, hookData);
@@ -306,6 +400,11 @@ contract RehypothecationHooksTest is Test, Deployers, ERC1155TokenReceiver {
 
         bytes memory hookData = abi.encode(tickLower, tickUpper);
         bytes32 positionKey = keccak256(abi.encodePacked(poolKey.toId(), tickLower, tickUpper));
+
+
+        // Fund the orchestrator with tokens for potential Aave operations
+        token0.mint(address(orchestrator), 10 ether);
+        token1.mint(address(orchestrator), 10 ether);
 
         _addLiquidity(tickLower, tickUpper, liquidity, hookData);
 
