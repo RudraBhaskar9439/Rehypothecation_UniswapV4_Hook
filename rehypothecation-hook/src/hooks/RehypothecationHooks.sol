@@ -195,6 +195,32 @@ contract RehypothecationHooks is BaseHook {
             params.tickUpper
         );
 
+        // Move this logic to a helper to reduce stack usage
+        _handleAfterAddLiquidity(
+            key,
+            params,
+            delta,
+            lowerTick,
+            upperTick,
+            currentTick,
+            positionKey
+        );
+
+        return (
+            this.afterAddLiquidity.selector,
+            BalanceDeltaLibrary.ZERO_DELTA
+        );
+    }
+
+    function _handleAfterAddLiquidity(
+        PoolKey calldata key,
+        ModifyLiquidityParams calldata params,
+        BalanceDelta delta,
+        int24 lowerTick,
+        int24 upperTick,
+        int24 currentTick,
+        bytes32 positionKey
+    ) internal {
         uint256 amount0In = delta.amount0() < 0
             ? uint256(int256(-delta.amount0()))
             : 0;
@@ -204,10 +230,9 @@ contract RehypothecationHooks is BaseHook {
 
         address asset0 = Currency.unwrap(key.currency0);
         address asset1 = Currency.unwrap(key.currency1);
-        bool success;
 
         if (liquidityOrchestrator.isPositionExists(positionKey)) {
-            success = liquidityOrchestrator.processLiquidityAdditionDeposit(
+            _updateExistingPosition(
                 positionKey,
                 currentTick,
                 amount0In,
@@ -215,16 +240,53 @@ contract RehypothecationHooks is BaseHook {
                 asset0,
                 asset1
             );
-
-            if (!success) {
-                revert LiquidityAdditionFailed();
-            }
-
-            return (
-                this.afterAddLiquidity.selector,
-                BalanceDeltaLibrary.ZERO_DELTA
+        } else {
+            _createNewPosition(
+                key,
+                lowerTick,
+                upperTick,
+                amount0In,
+                amount1In,
+                positionKey,
+                currentTick,
+                asset0,
+                asset1
             );
         }
+    }
+
+    function _updateExistingPosition(
+        bytes32 positionKey,
+        int24 currentTick,
+        uint256 amount0In,
+        uint256 amount1In,
+        address asset0,
+        address asset1
+    ) internal {
+        bool success = liquidityOrchestrator.processLiquidityAdditionDeposit(
+            positionKey,
+            currentTick,
+            amount0In,
+            amount1In,
+            asset0,
+            asset1
+        );
+        if (!success) {
+            revert LiquidityAdditionFailed();
+        }
+    }
+
+    function _createNewPosition(
+        PoolKey calldata key,
+        int24 lowerTick,
+        int24 upperTick,
+        uint256 amount0In,
+        uint256 amount1In,
+        bytes32 positionKey,
+        int24 currentTick,
+        address asset0,
+        address asset1
+    ) internal {
         uint256 totalLiquidity = amount0In + amount1In;
 
         ILiquidityOrchestrator.PositionData memory data = ILiquidityOrchestrator
@@ -241,10 +303,9 @@ contract RehypothecationHooks is BaseHook {
                 state: ILiquidityOrchestrator.PositionState.IN_RANGE
             });
 
-        // This will create a new position.
         liquidityOrchestrator.upsertPosition(positionKey, data);
 
-        success = liquidityOrchestrator.processLiquidityAdditionDeposit(
+        bool success = liquidityOrchestrator.processLiquidityAdditionDeposit(
             positionKey,
             currentTick,
             amount0In,
@@ -252,15 +313,9 @@ contract RehypothecationHooks is BaseHook {
             asset0,
             asset1
         );
-
         if (!success) {
             revert LiquidityAdditionFailed();
         }
-
-        return (
-            this.afterAddLiquidity.selector,
-            BalanceDeltaLibrary.ZERO_DELTA
-        );
     }
 
     function _beforeRemoveLiquidity(
@@ -477,51 +532,87 @@ contract RehypothecationHooks is BaseHook {
         BalanceDelta delta,
         bytes calldata hookData
     ) internal override returns (bytes4, int128) {
-        int24 oldTick = lastActiveTick;
         (, int24 newTick, , ) = poolManager.getSlot0(key.toId());
+        int24 oldTick = lastActiveTick;
 
         (int24 lowerTick, int24 upperTick) = _decryptHookData(hookData);
         bytes32 positionKey = _generatePositionKey(key, lowerTick, upperTick);
 
-        // Get initial position state
-        ILiquidityOrchestrator.PositionData memory p = liquidityOrchestrator
-            .getPosition(positionKey);
-        require(p.exists, "Position must exist");
+        // Split into smaller functions to reduce stack depth
+        _handleSwapStateUpdates(
+            key,
+            params,
+            delta,
+            positionKey,
+            oldTick,
+            newTick,
+            lowerTick,
+            upperTick
+        );
 
-        // Check if rebalance is needed
+        _emitSwapEvents(positionKey, oldTick, newTick, params.zeroForOne);
+
+        return (this.afterSwap.selector, 0);
+    }
+
+    function _handleSwapStateUpdates(
+        PoolKey calldata key,
+        SwapParams calldata params,
+        BalanceDelta delta,
+        bytes32 positionKey,
+        int24 oldTick,
+        int24 newTick,
+        int24 lowerTick,
+        int24 upperTick
+    ) internal {
+        ILiquidityOrchestrator.PositionData
+            memory position = liquidityOrchestrator.getPosition(positionKey);
+        require(position.exists, "Position must exist");
+
+        // Update reserves first
+        _updatePositionReserves(position, positionKey, params, delta);
+
+        // Check and handle rebalancing
         bool shouldRebalance = liquidityOrchestrator
             .checkPostSwapLiquidityNeeds(positionKey, oldTick, newTick);
 
-        // Update reserves based on swap
-        (uint256 reserveAmount0, ) = FHE.getDecryptResultSafe(p.reserveAmount0);
-        (uint256 reserveAmount1, ) = FHE.getDecryptResultSafe(p.reserveAmount1);
+        if (shouldRebalance) {
+            _handleRebalancing(
+                key,
+                positionKey,
+                oldTick,
+                newTick,
+                lowerTick,
+                upperTick
+            );
+        }
+    }
+
+    function _updatePositionReserves(
+        ILiquidityOrchestrator.PositionData memory position,
+        bytes32 positionKey,
+        SwapParams calldata params,
+        BalanceDelta delta
+    ) internal {
+        (uint256 reserveAmount0, ) = FHE.getDecryptResultSafe(
+            position.reserveAmount0
+        );
+        (uint256 reserveAmount1, ) = FHE.getDecryptResultSafe(
+            position.reserveAmount1
+        );
 
         if (params.zeroForOne) {
-            // token0 -> token1
-            uint256 amount0In = delta.amount0() < 0
-                ? uint256(int256(-delta.amount0()))
-                : 0;
-            uint256 amount1Out = delta.amount1() > 0
-                ? uint256(int256(delta.amount1()))
-                : 0;
-
-            reserveAmount0 += amount0In;
-            reserveAmount1 = reserveAmount1 > amount1Out
-                ? reserveAmount1 - amount1Out
-                : 0;
+            (reserveAmount0, reserveAmount1) = _updateReservesZeroForOne(
+                reserveAmount0,
+                reserveAmount1,
+                delta
+            );
         } else {
-            // token1 -> token0
-            uint256 amount1In = delta.amount1() < 0
-                ? uint256(int256(-delta.amount1()))
-                : 0;
-            uint256 amount0Out = delta.amount0() > 0
-                ? uint256(int256(delta.amount0()))
-                : 0;
-
-            reserveAmount1 += amount1In;
-            reserveAmount0 = reserveAmount0 > amount0Out
-                ? reserveAmount0 - amount0Out
-                : 0;
+            (reserveAmount0, reserveAmount1) = _updateReservesOneForZero(
+                reserveAmount0,
+                reserveAmount1,
+                delta
+            );
         }
 
         liquidityOrchestrator.updateReserves(
@@ -529,20 +620,61 @@ contract RehypothecationHooks is BaseHook {
             reserveAmount0,
             reserveAmount1
         );
+    }
 
-        // Verify state before management
-        if (shouldRebalance) {
-            require(
-                oldTick >= lowerTick && oldTick <= upperTick,
-                "Invalid old tick range"
-            );
-            require(
-                newTick < lowerTick || newTick > upperTick,
-                "New tick should be out of range"
-            );
-        }
+    function _updateReservesZeroForOne(
+        uint256 reserve0,
+        uint256 reserve1,
+        BalanceDelta delta
+    ) internal pure returns (uint256, uint256) {
+        uint256 amount0In = delta.amount0() < 0
+            ? uint256(int256(-delta.amount0()))
+            : 0;
+        uint256 amount1Out = delta.amount1() > 0
+            ? uint256(int256(delta.amount1()))
+            : 0;
 
-        // Execute management
+        reserve0 += amount0In;
+        reserve1 = reserve1 > amount1Out ? reserve1 - amount1Out : 0;
+
+        return (reserve0, reserve1);
+    }
+
+    function _updateReservesOneForZero(
+        uint256 reserve0,
+        uint256 reserve1,
+        BalanceDelta delta
+    ) internal pure returns (uint256, uint256) {
+        uint256 amount1In = delta.amount1() < 0
+            ? uint256(int256(-delta.amount1()))
+            : 0;
+        uint256 amount0Out = delta.amount0() > 0
+            ? uint256(int256(delta.amount0()))
+            : 0;
+
+        reserve1 += amount1In;
+        reserve0 = reserve0 > amount0Out ? reserve0 - amount0Out : 0;
+
+        return (reserve0, reserve1);
+    }
+
+    function _handleRebalancing(
+        PoolKey calldata key,
+        bytes32 positionKey,
+        int24 oldTick,
+        int24 newTick,
+        int24 lowerTick,
+        int24 upperTick
+    ) internal {
+        require(
+            oldTick >= lowerTick && oldTick <= upperTick,
+            "Invalid old tick range"
+        );
+        require(
+            newTick < lowerTick || newTick > upperTick,
+            "New tick should be out of range"
+        );
+
         address token0 = Currency.unwrap(key.currency0);
         address token1 = Currency.unwrap(key.currency1);
 
@@ -557,29 +689,31 @@ contract RehypothecationHooks is BaseHook {
             revert PostSwapManagementFailed();
         }
 
-        // Verify final state if rebalancing occurred
-        if (shouldRebalance) {
-            ILiquidityOrchestrator.PositionData
-                memory finalPosition = liquidityOrchestrator.getPosition(
-                    positionKey
-                );
-            require(
-                finalPosition.state ==
-                    ILiquidityOrchestrator.PositionState.IN_AAVE,
-                "Position should be in Aave after out-of-range swap"
+        ILiquidityOrchestrator.PositionData
+            memory finalPosition = liquidityOrchestrator.getPosition(
+                positionKey
             );
-        }
+        require(
+            finalPosition.state == ILiquidityOrchestrator.PositionState.IN_AAVE,
+            "Position should be in Aave after out-of-range swap"
+        );
+    }
 
-        // Emit encrypted events for privacy
+    function _emitSwapEvents(
+        bytes32 positionKey,
+        int24 oldTick,
+        int24 newTick,
+        bool zeroForOne
+    ) internal {
         emit EncryptedRebalancingDecision(
             positionKey,
             abi.encode(
                 FHE.asEuint32(uint32(int32(oldTick))),
                 FHE.asEuint32(uint32(int32(newTick))),
-                FHE.asEbool(params.zeroForOne),
+                FHE.asEbool(zeroForOne),
                 FHE.asEuint32(0), // Delta amounts set to 0 for privacy
                 FHE.asEuint32(0),
-                FHE.asEbool(shouldRebalance)
+                FHE.asEbool(true)
             )
         );
 
@@ -587,8 +721,6 @@ contract RehypothecationHooks is BaseHook {
             positionKey,
             abi.encode(FHE.asEuint32(1))
         );
-
-        return (this.afterSwap.selector, 0);
     }
 
     /**

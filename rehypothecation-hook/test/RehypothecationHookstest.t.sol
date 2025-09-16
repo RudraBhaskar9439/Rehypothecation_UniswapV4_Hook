@@ -50,13 +50,42 @@ contract RehypothecationHooksTest is Test, Deployers, ERC1155TokenReceiver {
     IERC20 public usdcToken;
     IERC20 public wethToken;
 
+    struct SwapTestParams {
+        int24 tickLower;
+        int24 tickUpper;
+        uint256 amount0Desired;
+        uint256 amount1Desired;
+        bytes32 positionKey;
+        bytes formattedHookData;
+    }
+
+    struct SwapInRangeTestParams {
+        int24 tickLower;
+        int24 tickUpper;
+        uint256 amount0Desired;
+        uint256 amount1Desired;
+        bytes32 positionKey;
+        bytes formattedHookData;
+        uint128 liquidity;
+    }
+
+    // RPC URL for Sepolia
+    string SEPOLIA_RPC_URL = "https://ethereum-sepolia-rpc.publicnode.com";
+    uint256 FORK_BLOCK_NUMBER = 9215872;
+
+
     function setUp() public {
+        // Create and select the fork
+        vm.createSelectFork(SEPOLIA_RPC_URL, FORK_BLOCK_NUMBER);
+
+        // Deploy core contracts
         deployFreshManagerAndRouters();
 
+        // Setup tokens using real Sepolia addresses
         usdcToken = IERC20(USDC);
         wethToken = IERC20(WETH);
 
-        // Sort tokens to ensure correct currency0/currency1 assignment
+        // Sort tokens
         if (address(usdcToken) < address(wethToken)) {
             currency0 = Currency.wrap(address(usdcToken));
             currency1 = Currency.wrap(address(wethToken));
@@ -71,21 +100,17 @@ contract RehypothecationHooksTest is Test, Deployers, ERC1155TokenReceiver {
 
         user = address(0xBEEF);
 
-        // Fund test contract and orchestrator with tokens
+        // Fund accounts with real tokens
         deal(address(token0), address(this), 1000e18);
         deal(address(token1), address(this), 1000e18);
         deal(address(token0), address(orchestrator), 1000e18);
         deal(address(token1), address(orchestrator), 1000e18);
-        deal(address(token0), user, 1000e18);
-        deal(address(token1), user, 1000e18);
 
-        // Deploy Aave contract with real pool
+        // Deploy contracts with real Aave pool
         aaveContract = new Aave(AAVE_POOL);
-
-        // Deploy LiquidityOrchestrator
         orchestrator = new LiquidityOrchestrator(address(aaveContract));
 
-        // Deploy hook with correct flags
+        // Deploy hook
         uint160 flags = uint160(
             Hooks.BEFORE_SWAP_FLAG |
                 Hooks.AFTER_SWAP_FLAG |
@@ -103,6 +128,22 @@ contract RehypothecationHooksTest is Test, Deployers, ERC1155TokenReceiver {
 
         hook = RehypothecationHooks(hookAddress);
 
+        // Set up approvals
+        _setupApprovals();
+
+        // Initialize pool
+        poolKey = PoolKey({
+            currency0: currency0,
+            currency1: currency1,
+            fee: 100,
+            tickSpacing: 1,
+            hooks: hook
+        });
+
+        IPoolManager(manager).initialize(poolKey, SQRT_PRICE_1_1);
+    }
+
+    function _setupApprovals() internal {
         // Approve tokens
         token0.approve(address(manager), type(uint256).max);
         token1.approve(address(manager), type(uint256).max);
@@ -120,19 +161,6 @@ contract RehypothecationHooksTest is Test, Deployers, ERC1155TokenReceiver {
         token0.approve(AAVE_POOL, type(uint256).max);
         token1.approve(AAVE_POOL, type(uint256).max);
         vm.stopPrank();
-
-        poolKey = PoolKey({
-            currency0: currency0,
-            currency1: currency1,
-            fee: 100,
-            tickSpacing: 1,
-            hooks: hook
-        });
-
-        IPoolManager(manager).initialize(
-            poolKey,
-            79228162514264337593543950336
-        ); // sqrtPriceX96 = 2**96
     }
 
     function _formatHookData(
@@ -200,50 +228,68 @@ contract RehypothecationHooksTest is Test, Deployers, ERC1155TokenReceiver {
         (, int24 currentTick, , ) = manager.getSlot0(poolKey.toId());
         console.log("Current tick:", currentTick);
 
-        int24 tickLower = currentTick + 120;
-        int24 tickUpper = currentTick + 240;
+        SwapTestParams memory params = _setupTestParams(currentTick);
+        _executeAddLiquidity(params, currentTick);
+        _verifyAddLiquidityResult(params);
+    }
 
-        uint256 amount0Desired = address(token0) == USDC ? 1000e6 : 1e18;
-        uint256 amount1Desired = address(token1) == USDC ? 1000e6 : 1e18;
+    function _setupTestParams(
+        int24 currentTick
+    ) internal view returns (SwapTestParams memory) {
+        SwapTestParams memory params;
+        params.tickLower = currentTick + 120;
+        params.tickUpper = currentTick + 240;
+        params.amount0Desired = address(token0) == USDC ? 1000e6 : 1e18;
+        params.amount1Desired = address(token1) == USDC ? 1000e6 : 1e18;
 
-        deal(address(token0), address(orchestrator), amount0Desired);
-        deal(address(token1), address(orchestrator), amount1Desired);
+        bytes memory rawData = abi.encode(params.tickLower, params.tickUpper);
+        params.formattedHookData = _formatHookData(rawData);
 
-        uint160 sqrtPriceLower = TickMath.getSqrtPriceAtTick(tickLower);
-        uint160 sqrtPriceUpper = TickMath.getSqrtPriceAtTick(tickUpper);
+        params.positionKey = keccak256(
+            abi.encodePacked(poolKey.toId(), params.tickLower, params.tickUpper)
+        );
+
+        return params;
+    }
+
+    function _executeAddLiquidity(
+        SwapTestParams memory params,
+        int24 currentTick
+    ) internal {
+        deal(address(token0), address(orchestrator), params.amount0Desired);
+        deal(address(token1), address(orchestrator), params.amount1Desired);
+
+        uint160 sqrtPriceLower = TickMath.getSqrtPriceAtTick(params.tickLower);
+        uint160 sqrtPriceUpper = TickMath.getSqrtPriceAtTick(params.tickUpper);
 
         uint128 liquidity = LiquidityAmounts.getLiquidityForAmounts(
             TickMath.getSqrtPriceAtTick(currentTick),
             sqrtPriceLower,
             sqrtPriceUpper,
-            amount0Desired,
-            amount1Desired
+            params.amount0Desired,
+            params.amount1Desired
         );
 
-        bytes memory rawData = abi.encode(tickLower, tickUpper);
-        bytes memory formattedHookData = _formatHookData(rawData);
+        token0.approve(address(manager), params.amount0Desired);
+        token1.approve(address(manager), params.amount1Desired);
 
-        token0.approve(address(manager), amount0Desired);
-        token1.approve(address(manager), amount1Desired);
-
-        ModifyLiquidityParams memory params = ModifyLiquidityParams({
-            tickLower: tickLower,
-            tickUpper: tickUpper,
+        ModifyLiquidityParams memory modifyParams = ModifyLiquidityParams({
+            tickLower: params.tickLower,
+            tickUpper: params.tickUpper,
             liquidityDelta: int256(uint256(liquidity)),
             salt: bytes32(0)
         });
 
         modifyLiquidityRouter.modifyLiquidity(
             poolKey,
-            params,
-            formattedHookData
+            modifyParams,
+            params.formattedHookData
         );
+    }
 
-        bytes32 positionKey = keccak256(
-            abi.encodePacked(poolKey.toId(), tickLower, tickUpper)
-        );
+    function _verifyAddLiquidityResult(SwapTestParams memory params) internal {
         ILiquidityOrchestrator.PositionData memory position = orchestrator
-            .getPosition(positionKey);
+            .getPosition(params.positionKey);
 
         (uint256 aaveAmount0, ) = FHE.getDecryptResultSafe(
             position.aaveAmount0
@@ -255,14 +301,12 @@ contract RehypothecationHooksTest is Test, Deployers, ERC1155TokenReceiver {
         console.log("Aave amount0 (token0):", aaveAmount0);
         console.log("Aave amount1 (token1):", aaveAmount1);
 
-        // Accept either token being deposited, and allow for zero if deposit fails on testnet
-        bool deposited = (aaveAmount0 > 0 || aaveAmount1 > 0);
         emit log_named_uint("Aave amount0", aaveAmount0);
         emit log_named_uint("Aave amount1", aaveAmount1);
 
-        // Only assert state, not deposit, for testnet realism
         assertTrue(
-            position.state == ILiquidityOrchestrator.PositionState.IN_AAVE ||
+            position.state == ILiquidityOrchestrator.PositionState.IN_AAVE 
+            ||
                 position.state == ILiquidityOrchestrator.PositionState.IN_RANGE,
             "Position should be in Aave or in range"
         );
@@ -512,82 +556,112 @@ contract RehypothecationHooksTest is Test, Deployers, ERC1155TokenReceiver {
     }
 
     function test_swapWithFinalTickInRange() public {
-        (, int24 currentTickBeforeAdd, , ) = manager.getSlot0(poolKey.toId());
-        int24 tickLower = currentTickBeforeAdd - 60;
-        int24 tickUpper = currentTickBeforeAdd + 60;
+        (, int24 currentTick, , ) = manager.getSlot0(poolKey.toId());
 
-        uint256 amount0Desired = 1 ether;
-        uint256 amount1Desired = 1 ether;
+        // Setup test parameters
+        SwapInRangeTestParams memory params = _setupSwapInRangeParams(
+            currentTick
+        );
 
-        uint128 liquidity = LiquidityAmounts.getLiquidityForAmounts(
+        // Add initial liquidity
+        _executeInitialLiquidity(params);
+
+        // Verify initial state
+        _verifyInitialState(params);
+
+        // Execute and verify swap
+        _executeAndVerifySwap(params);
+    }
+
+    function _setupSwapInRangeParams(
+        int24 currentTick
+    ) internal view returns (SwapInRangeTestParams memory) {
+        SwapInRangeTestParams memory params;
+        params.tickLower = currentTick - 60;
+        params.tickUpper = currentTick + 60;
+        params.amount0Desired = 1 ether;
+        params.amount1Desired = 1 ether;
+
+        params.liquidity = LiquidityAmounts.getLiquidityForAmounts(
             SQRT_PRICE_1_1,
-            TickMath.getSqrtPriceAtTick(tickLower),
-            TickMath.getSqrtPriceAtTick(tickUpper),
-            amount0Desired,
-            amount1Desired
+            TickMath.getSqrtPriceAtTick(params.tickLower),
+            TickMath.getSqrtPriceAtTick(params.tickUpper),
+            params.amount0Desired,
+            params.amount1Desired
         );
 
-        bytes memory rawData = abi.encode(tickLower, tickUpper);
-        bytes memory formattedHookData = _formatHookData(rawData);
+        bytes memory rawData = abi.encode(params.tickLower, params.tickUpper);
+        params.formattedHookData = _formatHookData(rawData);
 
-        bytes32 positionKey = keccak256(
-            abi.encodePacked(poolKey.toId(), tickLower, tickUpper)
+        params.positionKey = keccak256(
+            abi.encodePacked(poolKey.toId(), params.tickLower, params.tickUpper)
         );
 
-        _addLiquidity(tickLower, tickUpper, liquidity, formattedHookData);
+        return params;
+    }
 
-        ILiquidityOrchestrator.PositionData
-            memory positionBeforeSwap = orchestrator.getPosition(positionKey);
-        (uint256 aaveAmount0Before, ) = FHE.getDecryptResultSafe(
-            positionBeforeSwap.aaveAmount0
+    function _executeInitialLiquidity(
+        SwapInRangeTestParams memory params
+    ) internal {
+        _addLiquidity(
+            params.tickLower,
+            params.tickUpper,
+            params.liquidity,
+            params.formattedHookData
         );
-        (uint256 aaveAmount1Before, ) = FHE.getDecryptResultSafe(
-            positionBeforeSwap.aaveAmount1
+    }
+
+    function _verifyInitialState(SwapInRangeTestParams memory params) internal {
+        ILiquidityOrchestrator.PositionData memory position = orchestrator
+            .getPosition(params.positionKey);
+
+        (uint256 aaveAmount0, ) = FHE.getDecryptResultSafe(
+            position.aaveAmount0
         );
-        assertEq(
-            aaveAmount0Before,
-            0,
-            "Token0 Aave amount should be 0 before swap"
+        (uint256 aaveAmount1, ) = FHE.getDecryptResultSafe(
+            position.aaveAmount1
         );
-        assertEq(
-            aaveAmount1Before,
-            0,
-            "Token1 Aave amount should be 0 before swap"
-        );
+
+        assertEq(aaveAmount0, 0, "Token0 Aave amount should be 0 before swap");
+        assertEq(aaveAmount1, 0, "Token1 Aave amount should be 0 before swap");
         assertTrue(
-            positionBeforeSwap.state ==
-                ILiquidityOrchestrator.PositionState.IN_RANGE,
+            position.state == ILiquidityOrchestrator.PositionState.IN_RANGE,
             "State should be IN_RANGE before swap"
         );
+    }
 
-        uint256 orchestratorBalance0BeforeSwap = token0.balanceOf(
-            address(orchestrator)
-        );
-        uint256 orchestratorBalance1BeforeSwap = token1.balanceOf(
-            address(orchestrator)
-        );
+    function _executeAndVerifySwap(
+        SwapInRangeTestParams memory params
+    ) internal {
+        uint256 balance0Before = token0.balanceOf(address(orchestrator));
+        uint256 balance1Before = token1.balanceOf(address(orchestrator));
 
+        int24 oldTick = _getTickFromPoolManager(poolKey);
+        console.log("Old tick before swap:", oldTick);
+
+        // Execute swap
         SwapParams memory swapParams = SwapParams({
             zeroForOne: true,
             amountSpecified: 0.01 ether,
             sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
         });
 
-        int24 oldTick = _getTickFromPoolManager(poolKey);
-        console.log("Old tick before swap:", oldTick);
-
-        _performSwap(poolKey, swapParams, formattedHookData);
+        deal(address(token0), address(this), 5 ether);
+        token0.approve(address(swapRouter), 5 ether);
+        _performSwap(poolKey, swapParams, params.formattedHookData);
 
         int24 newTick = _getTickFromPoolManager(poolKey);
         console.log("New tick after swap:", newTick);
 
-        ILiquidityOrchestrator.PositionData
-            memory positionAfterSwap = orchestrator.getPosition(positionKey);
+        // Verify final state
+        ILiquidityOrchestrator.PositionData memory positionAfter = orchestrator
+            .getPosition(params.positionKey);
+
         (uint256 aaveAmount0After, ) = FHE.getDecryptResultSafe(
-            positionAfterSwap.aaveAmount0
+            positionAfter.aaveAmount0
         );
         (uint256 aaveAmount1After, ) = FHE.getDecryptResultSafe(
-            positionAfterSwap.aaveAmount1
+            positionAfter.aaveAmount1
         );
 
         assertEq(
@@ -601,24 +675,24 @@ contract RehypothecationHooksTest is Test, Deployers, ERC1155TokenReceiver {
             "Token1 Aave amount should still be 0 after in-range swap"
         );
         assertTrue(
-            positionAfterSwap.state ==
+            positionAfter.state ==
                 ILiquidityOrchestrator.PositionState.IN_RANGE,
             "State should remain IN_RANGE after in-range swap"
         );
 
         assertEq(
             token0.balanceOf(address(orchestrator)),
-            orchestratorBalance0BeforeSwap,
+            balance0Before,
             "Orchestrator token0 balance changed unexpectedly"
         );
         assertEq(
             token1.balanceOf(address(orchestrator)),
-            orchestratorBalance1BeforeSwap,
+            balance1Before,
             "Orchestrator token1 balance changed unexpectedly"
         );
 
         assertTrue(
-            newTick >= tickLower && newTick <= tickUpper,
+            newTick >= params.tickLower && newTick <= params.tickUpper,
             "Final tick should remain within the liquidity range"
         );
 
