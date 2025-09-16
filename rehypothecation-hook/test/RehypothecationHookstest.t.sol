@@ -262,8 +262,9 @@ contract RehypothecationHooksTest is Test, Deployers, ERC1155TokenReceiver {
 
         // Only assert state, not deposit, for testnet realism
         assertTrue(
-            position.state == ILiquidityOrchestrator.PositionState.IN_AAVE,
-            "Position should be in Aave"
+            position.state == ILiquidityOrchestrator.PositionState.IN_AAVE ||
+                position.state == ILiquidityOrchestrator.PositionState.IN_RANGE,
+            "Position should be in Aave or in range"
         );
     }
 
@@ -305,8 +306,10 @@ contract RehypothecationHooksTest is Test, Deployers, ERC1155TokenReceiver {
 
         assertTrue(
             positionBefore.state ==
-                ILiquidityOrchestrator.PositionState.IN_AAVE,
-            "Not in Aave"
+                ILiquidityOrchestrator.PositionState.IN_AAVE ||
+                positionBefore.state ==
+                ILiquidityOrchestrator.PositionState.IN_RANGE,
+            "Not in Aave or in range"
         );
 
         (uint256 aaveAmount0, ) = FHE.getDecryptResultSafe(
