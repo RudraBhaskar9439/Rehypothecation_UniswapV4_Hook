@@ -21,6 +21,7 @@ import {TickMath} from "v4-core/libraries/TickMath.sol";
 import {SqrtPriceMath} from "v4-core/libraries/SqrtPriceMath.sol";
 import {LiquidityAmounts} from "@uniswap/v4-core/test/utils/LiquidityAmounts.sol";
 import {Position} from "v4-core/libraries/Position.sol";
+import {StateLibrary} from "v4-core/libraries/StateLibrary.sol";
 
 import {ERC1155TokenReceiver} from "solmate/src/tokens/ERC1155.sol";
 
@@ -35,6 +36,8 @@ contract RehypothecationHooksTest is Test, Deployers, ERC1155TokenReceiver {
     address constant AAVE_POOL = 0x6Ae43d3271ff6888e7Fc43Fd7321a503ff738951; // Aave V3 Pool
     address constant USDC = 0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238; // USDC on Sepolia
     address constant WETH = 0x7b79995e5f793A07Bc00c21412e50Ecae098E7f9; // WETH on Sepolia
+
+    using StateLibrary for IPoolManager;
 
     IERC20 public token0;
     IERC20 public token1;
@@ -118,12 +121,23 @@ contract RehypothecationHooksTest is Test, Deployers, ERC1155TokenReceiver {
         token1.approve(AAVE_POOL, type(uint256).max);
         vm.stopPrank();
 
-        // Initialize pool with real tokens
-        (key, ) = initPool(currency0, currency1, hook, 3000, SQRT_PRICE_1_1);
-        poolKey = key;
+        poolKey = PoolKey({
+            currency0: currency0,
+            currency1: currency1,
+            fee: 100,
+            tickSpacing: 1,
+            hooks: hook
+        });
+
+        IPoolManager(manager).initialize(
+            poolKey,
+            79228162514264337593543950336
+        ); // sqrtPriceX96 = 2**96
     }
 
-    function _formatHookData(bytes memory data) internal pure returns (bytes memory) {
+    function _formatHookData(
+        bytes memory data
+    ) internal pure returns (bytes memory) {
         return abi.encodePacked(bytes1(0x00), data);
     }
 
@@ -183,7 +197,9 @@ contract RehypothecationHooksTest is Test, Deployers, ERC1155TokenReceiver {
     }
 
     function test_AddLiquidityOutOfRange() public {
-        (, int24 currentTick, , ) = manager.getSlot0(poolKey.toId());
+        (, int24 currentTick, , ) = manager.getSlot0(
+            poolKey.toId()
+        );
         console.log("Current tick:", currentTick);
 
         int24 tickLower = currentTick + 120;
@@ -278,7 +294,8 @@ contract RehypothecationHooksTest is Test, Deployers, ERC1155TokenReceiver {
         console.log("Position state before:", uint256(positionBefore.state));
 
         assertTrue(
-            positionBefore.state == ILiquidityOrchestrator.PositionState.IN_AAVE,
+            positionBefore.state ==
+                ILiquidityOrchestrator.PositionState.IN_AAVE,
             "Not in Aave"
         );
 
