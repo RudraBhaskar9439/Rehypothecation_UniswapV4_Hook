@@ -611,7 +611,7 @@ contract RehypothecationHooksTest is Test, Deployers, ERC1155TokenReceiver {
         );
     }
 
-    function _verifyInitialState(SwapInRangeTestParams memory params) internal {
+    function _verifyInitialState(SwapInRangeTestParams memory params) internal view {
         ILiquidityOrchestrator.PositionData memory position = orchestrator
             .getPosition(params.positionKey);
 

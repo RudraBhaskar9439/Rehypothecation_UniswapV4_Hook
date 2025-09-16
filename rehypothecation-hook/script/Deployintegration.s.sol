@@ -29,8 +29,9 @@ contract Deployintegration is Script {
         return (address(aave), address(orchestrator));
     }
 
-    function deployAnvil()
+    function deployAnvil ()
         external
+        pure
         returns (address aaveAddr, address orchestratorAddr)
     {
         // Implement as needed, or return dummy addresses for now
