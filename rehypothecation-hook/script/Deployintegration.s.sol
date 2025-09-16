@@ -1,4 +1,3 @@
-//SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
 import {Script} from "forge-std/Script.sol";
@@ -6,35 +5,35 @@ import {Aave} from "../src/Aave.sol";
 import {LiquidityOrchestrator} from "../src/LiquidityOrchestrator.sol";
 
 contract Deployintegration is Script {
-    // Replace with the actual LendingPool addresses for each network
-    address constant ANVIL_LENDING_POOL = 0x387d311e47e80b498169e6fb51d3193167d89F7D; // Dummy for local
-    address constant SEPOLIA_LENDING_POOL = 0x6Ae43d3271ff6888e7Fc43Fd7321a503ff738951; // <-- Put Sepolia Aave pool address here
+    // Aave V3 Sepolia Addresses
+    address constant SEPOLIA_POOL = 0x6Ae43d3271ff6888e7Fc43Fd7321a503ff738951; // Aave V3 Pool
+    address constant SEPOLIA_USDC = 0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238; // USDC on Sepolia
+    address constant SEPOLIA_WETH = 0x7b79995e5f793A07Bc00c21412e50Ecae098E7f9; // WETH on Sepolia
 
-    function deployAnvil() external returns (address aaveAddr, address orchestratorAddr) {
+    function deploySepolia()
+        external
+        returns (address aaveAddr, address orchestratorAddr)
+    {
         vm.startBroadcast();
 
-        // Deploy Aave contract with local LendingPool address
-        Aave aave = new Aave(ANVIL_LENDING_POOL);
+        // Deploy Aave contract with Sepolia Pool address
+        Aave aave = new Aave(SEPOLIA_POOL);
 
         // Deploy LiquidityOrchestrator with Aave contract address
-        LiquidityOrchestrator orchestrator = new LiquidityOrchestrator(address(aave));
+        LiquidityOrchestrator orchestrator = new LiquidityOrchestrator(
+            address(aave)
+        );
 
         vm.stopBroadcast();
 
         return (address(aave), address(orchestrator));
     }
 
-    function deploySepolia() external returns (address aaveAddr, address orchestratorAddr) {
-        vm.startBroadcast();
-
-        // Deploy Aave contract with Sepolia LendingPool address
-        Aave aave = new Aave(SEPOLIA_LENDING_POOL);
-
-        // Deploy LiquidityOrchestrator with Aave contract address
-        LiquidityOrchestrator orchestrator = new LiquidityOrchestrator(address(aave));
-
-        vm.stopBroadcast();
-
-        return (address(aave), address(orchestrator));
+    function deployAnvil()
+        external
+        returns (address aaveAddr, address orchestratorAddr)
+    {
+        // Implement as needed, or return dummy addresses for now
+        return (address(0), address(0));
     }
 }

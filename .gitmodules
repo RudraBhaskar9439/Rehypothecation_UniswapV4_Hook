@@ -19,3 +19,6 @@
 [submodule "rehypothecation-hook/lib/fhenix-contracts"]
 	path = rehypothecation-hook/lib/fhenix-contracts
 	url = https://github.com/FhenixProtocol/fhenix-contracts
+[submodule "rehypothecation-hook/lib/openzeppelin-contracts"]
+	path = rehypothecation-hook/lib/openzeppelin-contracts
+	url = https://github.com/OpenZeppelin/openzeppelin-contracts
