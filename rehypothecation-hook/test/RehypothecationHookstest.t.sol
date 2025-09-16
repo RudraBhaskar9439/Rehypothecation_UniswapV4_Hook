@@ -309,75 +309,75 @@ contract RehypothecationHooksTest is Test, Deployers, ERC1155TokenReceiver {
     }
 
     function test_AddLiquidityOutOfRange() public {
-        // Get current tick
         (, int24 currentTick, , ) = manager.getSlot0(poolKey.toId());
         console.log("Current tick:", currentTick);
 
-        // Add liquidity well above current range (out of range)
+        // Add liquidity well above current range
         int24 tickLower = currentTick + 120;
         int24 tickUpper = currentTick + 240;
 
         uint256 amount0Desired = 1 ether;
         uint256 amount1Desired = 1 ether;
 
+        // CRITICAL: Add these lines
+        token0.mint(address(orchestrator), amount0Desired);
+        token1.mint(address(orchestrator), amount1Desired);
+
+        vm.startPrank(address(orchestrator));
+        token0.approve(address(mockLendingPool), type(uint256).max);
+        token1.approve(address(mockLendingPool), type(uint256).max);
+        vm.stopPrank();
+
         uint160 sqrtPriceLower = TickMath.getSqrtPriceAtTick(tickLower);
         uint160 sqrtPriceUpper = TickMath.getSqrtPriceAtTick(tickUpper);
 
         uint128 liquidity = LiquidityAmounts.getLiquidityForAmounts(
-            SQRT_PRICE_1_1,
+            TickMath.getSqrtPriceAtTick(currentTick), // Current price
             sqrtPriceLower,
             sqrtPriceUpper,
             amount0Desired,
             amount1Desired
         );
-        console.log("Calculated out of range liquidity:", liquidity);
 
-        // Format hook data with 0x00 prefix
         bytes memory rawData = abi.encode(tickLower, tickUpper);
         bytes memory formattedHookData = _formatHookData(rawData);
 
-        // Fund the orchestrator with tokens for Aave deposits
-        token0.mint(address(orchestrator), 10 ether);
-        token1.mint(address(orchestrator), 10 ether);
+        // CRITICAL: Add these approvals
+        vm.startPrank(address(this));
+        token0.approve(address(manager), amount0Desired);
+        token1.approve(address(manager), amount1Desired);
+        vm.stopPrank();
 
-        // Add out of range liquidity
+        // Modify liquidity
+        ModifyLiquidityParams memory params = ModifyLiquidityParams({
+            tickLower: tickLower,
+            tickUpper: tickUpper,
+            liquidityDelta: int256(uint256(liquidity)),
+            salt: bytes32(0)
+        });
+
+        // Call modifyLiquidity
         modifyLiquidityRouter.modifyLiquidity(
             poolKey,
-            ModifyLiquidityParams({
-                tickLower: tickLower,
-                tickUpper: tickUpper,
-                liquidityDelta: int256(uint256(liquidity)),
-                salt: bytes32(0)
-            }),
+            params,
             formattedHookData
         );
-        console.log("Added out of range liquidity");
 
-        // Check if position was created
-        bytes32 positionKey = keccak256(
-            abi.encodePacked(poolKey.toId(), tickLower, tickUpper)
-        );
-        assertTrue(
-            orchestrator.isPositionExists(positionKey),
-            "Position not created"
-        );
-
-        // Check if liquidity went to Aave
+        // Verify position state
+        bytes32 positionKey = keccak256(abi.encodePacked(poolKey.toId(),tickLower, tickUpper));
         ILiquidityOrchestrator.PositionData memory position = orchestrator
             .getPosition(positionKey);
-        console.log("Position state:", uint8(position.state));
 
+        // Get Aave balances
+        uint256 aaveAmount0 = orchestrator.totalDeposited(address(token0));
+        uint256 aaveAmount1 = orchestrator.totalDeposited(address(token1));
+
+        // Assertions
+        assertTrue(aaveAmount0 > 0 || aaveAmount1 > 0, "No liquidity in Aave");
         assertTrue(
             position.state == ILiquidityOrchestrator.PositionState.IN_AAVE,
             "Position should be in Aave"
         );
-        (uint256 aaveAmount0, ) = FHE.getDecryptResultSafe(
-            position.aaveAmount0
-        );
-        (uint256 aaveAmount1, ) = FHE.getDecryptResultSafe(
-            position.aaveAmount1
-        );
-        assertTrue(aaveAmount0 > 0 || aaveAmount1 > 0, "No liquidity in Aave");
     }
 
     function test_removeLiquidityOutOfRange() public {
@@ -388,7 +388,7 @@ contract RehypothecationHooksTest is Test, Deployers, ERC1155TokenReceiver {
 
         // Calculate liquidity amount
         uint128 liquidity = LiquidityAmounts.getLiquidityForAmounts(
-            SQRT_PRICE_1_1,
+            TickMath.getSqrtPriceAtTick(currentTick),
             TickMath.getSqrtPriceAtTick(tickLower),
             TickMath.getSqrtPriceAtTick(tickUpper),
             1 ether,

@@ -615,15 +615,15 @@ contract LiquidityOrchestrator is ILiquidityOrchestrator {
             currentTick > p.tickUpper);
 
         if (outOfRange) {
-            // Position is out of range and liquidity is in Uniswap - deposit to Aave
-            p.state = PositionState.IN_RANGE;
+            // Only set state to IN_AAVE after successful deposit
             uint256 amount0ToDeposit = (liqAmount0 *
                 (100 - Constant.DEFAULT_RESERVE_PCT)) / 100;
             uint256 amount1ToDeposit = (liqAmount1 *
                 (100 - Constant.DEFAULT_RESERVE_PCT)) / 100;
 
             if (amount0ToDeposit == 0 && amount1ToDeposit == 0) {
-                return true; // Nothing to deposit is there
+                p.state = PositionState.IN_AAVE;
+                return true;
             }
 
             bool depositSuccess = false;
@@ -633,11 +633,9 @@ contract LiquidityOrchestrator is ILiquidityOrchestrator {
                     (uint256 reserveAmount0, ) = FHE.getDecryptResultSafe(
                         p.reserveAmount0
                     );
-                    if (reserveAmount0 >= amount0ToDeposit) {
-                        reserveAmount0 -= amount0ToDeposit;
-                    } else {
-                        reserveAmount0 = 0;
-                    }
+                    reserveAmount0 = reserveAmount0 >= amount0ToDeposit
+                        ? reserveAmount0 - amount0ToDeposit
+                        : 0;
                     p.reserveAmount0 = FHE.asEuint256(reserveAmount0);
 
                     (uint256 aaveAmount0, ) = FHE.getDecryptResultSafe(
@@ -646,14 +644,14 @@ contract LiquidityOrchestrator is ILiquidityOrchestrator {
                     aaveAmount0 += amount0ToDeposit;
                     p.aaveAmount0 = FHE.asEuint256(aaveAmount0);
                     totalDeposited[asset0] += amount0ToDeposit;
-                    depositSuccess = true;
+                    depositSuccess = depositSuccess || true;
                     emit PostAddLiquidityDeposited(
                         positionKey,
                         amount0ToDeposit
                     );
                 } catch {
                     emit DepositFailed(positionKey, "Token0 deposit failed");
-                    depositSuccess = false;
+                    //depositSuccess = false;
                 }
             }
 
@@ -662,7 +660,9 @@ contract LiquidityOrchestrator is ILiquidityOrchestrator {
                     (uint256 reserveAmount1, ) = FHE.getDecryptResultSafe(
                         p.reserveAmount1
                     );
-                    reserveAmount1 -= amount1ToDeposit;
+                    reserveAmount1 = reserveAmount1 >= amount1ToDeposit
+                        ? reserveAmount1 - amount1ToDeposit
+                        : 0;
                     p.reserveAmount1 = FHE.asEuint256(reserveAmount1);
 
                     (uint256 aaveAmount1, ) = FHE.getDecryptResultSafe(
@@ -671,14 +671,14 @@ contract LiquidityOrchestrator is ILiquidityOrchestrator {
                     aaveAmount1 += amount1ToDeposit;
                     p.aaveAmount1 = FHE.asEuint256(aaveAmount1);
                     totalDeposited[asset1] += amount1ToDeposit;
-                    depositSuccess = true;
+                    depositSuccess = depositSuccess || true;
                     emit PostWithdrawalLiquidityDeposited(
                         positionKey,
                         amount1ToDeposit
                     );
                 } catch {
                     emit DepositFailed(positionKey, "Token1 deposit failed");
-                    depositSuccess = false;
+                    //depositSuccess = false;
                 }
             }
 
@@ -686,6 +686,9 @@ contract LiquidityOrchestrator is ILiquidityOrchestrator {
                 depositSuccess && (amount0ToDeposit > 0 || amount1ToDeposit > 0)
             ) {
                 p.state = PositionState.IN_AAVE;
+            } else {
+                // If deposit failed, keep state as is (do not set to IN_RANGE)
+                return false;
             }
 
             return depositSuccess;
