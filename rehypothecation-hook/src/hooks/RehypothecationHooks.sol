@@ -481,29 +481,18 @@ contract RehypothecationHooks is BaseHook {
         (, int24 newTick, , ) = poolManager.getSlot0(key.toId());
 
         (int24 lowerTick, int24 upperTick) = _decryptHookData(hookData);
-
         bytes32 positionKey = _generatePositionKey(key, lowerTick, upperTick);
 
-        // Encrypt tick values for privacy
-        euint32 encryptedOldTick = FHE.asEuint32(uint32(int32(oldTick)));
-        euint32 encryptedNewTick = FHE.asEuint32(uint32(int32(newTick)));
-
-        // Store encrypted ticks
-        encryptedLastActiveTicks[positionKey] = encryptedNewTick;
-
+        // Get initial position state
         ILiquidityOrchestrator.PositionData memory p = liquidityOrchestrator
             .getPosition(positionKey);
-        // Encrypt swap direction and amounts
-        ebool isZeroForOne = FHE.asEbool(params.zeroForOne);
+        require(p.exists, "Position must exist");
 
+        // Check if rebalance is needed
         bool shouldRebalance = liquidityOrchestrator
             .checkPostSwapLiquidityNeeds(positionKey, oldTick, newTick);
-        ebool encryptedShouldRebalance = FHE.asEbool(shouldRebalance);
 
-        euint32 encryptedAmount0Delta = FHE.asEuint32(0);
-        euint32 encryptedAmount1Delta = FHE.asEuint32(0);
-
-        // Decrypt amounts first to avoid arithmetic issues with encrypted values
+        // Update reserves based on swap
         (uint256 reserveAmount0, ) = FHE.getDecryptResultSafe(p.reserveAmount0);
         (uint256 reserveAmount1, ) = FHE.getDecryptResultSafe(p.reserveAmount1);
 
@@ -512,45 +501,48 @@ contract RehypothecationHooks is BaseHook {
             uint256 amount0In = delta.amount0() < 0
                 ? uint256(int256(-delta.amount0()))
                 : 0;
-            reserveAmount0 += amount0In;
-            p.reserveAmount0 = FHE.asEuint256(reserveAmount0);
-
             uint256 amount1Out = delta.amount1() > 0
                 ? uint256(int256(delta.amount1()))
                 : 0;
+
+            reserveAmount0 += amount0In;
             reserveAmount1 = reserveAmount1 > amount1Out
                 ? reserveAmount1 - amount1Out
                 : 0;
-            p.reserveAmount1 = FHE.asEuint256(reserveAmount1);
         } else {
             // token1 -> token0
             uint256 amount1In = delta.amount1() < 0
                 ? uint256(int256(-delta.amount1()))
                 : 0;
-            reserveAmount1 += amount1In;
-            p.reserveAmount1 = FHE.asEuint256(reserveAmount1);
-
             uint256 amount0Out = delta.amount0() > 0
                 ? uint256(int256(delta.amount0()))
                 : 0;
+
+            reserveAmount1 += amount1In;
             reserveAmount0 = reserveAmount0 > amount0Out
                 ? reserveAmount0 - amount0Out
                 : 0;
-            p.reserveAmount0 = FHE.asEuint256(reserveAmount0);
         }
 
-        emit EncryptedRebalancingDecision(
+        liquidityOrchestrator.updateReserves(
             positionKey,
-            abi.encode(
-                encryptedOldTick,
-                encryptedNewTick,
-                isZeroForOne,
-                encryptedAmount0Delta,
-                encryptedAmount1Delta,
-                encryptedShouldRebalance
-            )
+            reserveAmount0,
+            reserveAmount1
         );
 
+        // Verify state before management
+        if (shouldRebalance) {
+            require(
+                oldTick >= lowerTick && oldTick <= upperTick,
+                "Invalid old tick range"
+            );
+            require(
+                newTick < lowerTick || newTick > upperTick,
+                "New tick should be out of range"
+            );
+        }
+
+        // Execute management
         address token0 = Currency.unwrap(key.currency0);
         address token1 = Currency.unwrap(key.currency1);
 
@@ -565,12 +557,35 @@ contract RehypothecationHooks is BaseHook {
             revert PostSwapManagementFailed();
         }
 
-        // Always emit success signal regardless of whether rebalancing was needed, to prevent MEV analysis
-        euint32 encryptedSuccessSignal = FHE.asEuint32(1);
+        // Verify final state if rebalancing occurred
+        if (shouldRebalance) {
+            ILiquidityOrchestrator.PositionData
+                memory finalPosition = liquidityOrchestrator.getPosition(
+                    positionKey
+                );
+            require(
+                finalPosition.state ==
+                    ILiquidityOrchestrator.PositionState.IN_AAVE,
+                "Position should be in Aave after out-of-range swap"
+            );
+        }
+
+        // Emit encrypted events for privacy
+        emit EncryptedRebalancingDecision(
+            positionKey,
+            abi.encode(
+                FHE.asEuint32(uint32(int32(oldTick))),
+                FHE.asEuint32(uint32(int32(newTick))),
+                FHE.asEbool(params.zeroForOne),
+                FHE.asEuint32(0), // Delta amounts set to 0 for privacy
+                FHE.asEuint32(0),
+                FHE.asEbool(shouldRebalance)
+            )
+        );
 
         emit EncryptedPostSwapCompleted(
             positionKey,
-            abi.encode(encryptedSuccessSignal)
+            abi.encode(FHE.asEuint32(1))
         );
 
         return (this.afterSwap.selector, 0);

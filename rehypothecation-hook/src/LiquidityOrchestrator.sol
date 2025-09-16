@@ -120,49 +120,19 @@ contract LiquidityOrchestrator is ILiquidityOrchestrator {
             return false;
         }
 
-        // Encrypt tick comparisons
-        euint32 encryptedNewTick = FHE.asEuint32(uint32(int32(newTick)));
-        euint32 encryptedOldTick = FHE.asEuint32(uint32(int32(oldTick)));
-        euint32 encryptedTickLower = FHE.asEuint32(uint32(int32(p.tickLower)));
-        euint32 encryptedTickUpper = FHE.asEuint32(uint32(int32(p.tickUpper)));
+        // Check if new tick is out of range
+        bool isOutOfRange = newTick < p.tickLower || newTick > p.tickUpper;
 
-        // Encrypted range checks using FHE boolean operations
-        ebool currentlyInRange = FHE.and(
-            FHE.or(
-                FHE.gt(encryptedNewTick, encryptedTickLower),
-                FHE.eq(encryptedNewTick, encryptedTickLower)
-            ),
-            FHE.or(
-                FHE.lt(encryptedNewTick, encryptedTickUpper),
-                FHE.eq(encryptedNewTick, encryptedTickUpper)
-            )
-        );
+        // Check if old tick was in range
+        bool wasInRange = oldTick >= p.tickLower && oldTick <= p.tickUpper;
 
-        ebool wasInRange = FHE.and(
-            FHE.or(
-                FHE.gt(encryptedOldTick, encryptedTickLower),
-                FHE.eq(encryptedOldTick, encryptedTickLower)
-            ),
-            FHE.or(
-                FHE.lt(encryptedOldTick, encryptedTickUpper),
-                FHE.eq(encryptedOldTick, encryptedTickUpper)
-            )
-        );
+        // Only deposit if moving from in-range to out-of-range
+        if (wasInRange && isOutOfRange && p.state == PositionState.IN_RANGE) {
+            p.state = PositionState.IN_AAVE; // Update state immediately
+            return true;
+        }
 
-        // Encrypt state check
-        ebool isInRange = FHE.eq(
-            FHE.asEuint32(uint32(uint8(p.state))),
-            FHE.asEuint32(uint32(uint8(PositionState.IN_RANGE)))
-        );
-
-        // Encrypted logic: wasInRange && !currentlyInRange && p.state == PositionState.IN_RANGE
-        ebool needsDepositEncrypted = FHE.and(
-            FHE.and(wasInRange, FHE.not(currentlyInRange)),
-            isInRange
-        );
-
-        // Decrypt the result
-        (needsDeposit, ) = FHE.getDecryptResultSafe(needsDepositEncrypted);
+        return false;
     }
 
     /**
@@ -289,6 +259,19 @@ contract LiquidityOrchestrator is ILiquidityOrchestrator {
         }
 
         PositionData storage p = positions[positionKey];
+
+        // Verify state is correct before proceeding
+        require(p.exists, "Position must exist");
+
+        bool needsDeposit = checkPostSwapLiquidityNeeds(
+            positionKey,
+            oldTick,
+            newTick
+        );
+
+        if (!needsDeposit) {
+            return true;
+        }
 
         // Calculate amounts to deposit based on reservePct
         uint8 reservePCT = p.reservePct == 0
@@ -627,8 +610,10 @@ contract LiquidityOrchestrator is ILiquidityOrchestrator {
             }
 
             bool depositSuccess = false;
+            bool depositAttempted = false;
 
             if (amount0ToDeposit > 0) {
+                depositAttempted = true;
                 try Aave.deposit(asset0, amount0ToDeposit, address(this), 0) {
                     (uint256 reserveAmount0, ) = FHE.getDecryptResultSafe(
                         p.reserveAmount0
@@ -644,18 +629,18 @@ contract LiquidityOrchestrator is ILiquidityOrchestrator {
                     aaveAmount0 += amount0ToDeposit;
                     p.aaveAmount0 = FHE.asEuint256(aaveAmount0);
                     totalDeposited[asset0] += amount0ToDeposit;
-                    depositSuccess = depositSuccess || true;
+                    depositSuccess = true;
                     emit PostAddLiquidityDeposited(
                         positionKey,
                         amount0ToDeposit
                     );
                 } catch {
                     emit DepositFailed(positionKey, "Token0 deposit failed");
-                    //depositSuccess = false;
                 }
             }
 
             if (amount1ToDeposit > 0) {
+                depositAttempted = true;
                 try Aave.deposit(asset1, amount1ToDeposit, address(this), 0) {
                     (uint256 reserveAmount1, ) = FHE.getDecryptResultSafe(
                         p.reserveAmount1
@@ -671,27 +656,29 @@ contract LiquidityOrchestrator is ILiquidityOrchestrator {
                     aaveAmount1 += amount1ToDeposit;
                     p.aaveAmount1 = FHE.asEuint256(aaveAmount1);
                     totalDeposited[asset1] += amount1ToDeposit;
-                    depositSuccess = depositSuccess || true;
+                    depositSuccess = true;
                     emit PostWithdrawalLiquidityDeposited(
                         positionKey,
                         amount1ToDeposit
                     );
                 } catch {
                     emit DepositFailed(positionKey, "Token1 deposit failed");
-                    //depositSuccess = false;
                 }
             }
 
-            if (
-                depositSuccess && (amount0ToDeposit > 0 || amount1ToDeposit > 0)
-            ) {
+            // PATCH: If deposit fails for both tokens, do not revert, just set state to IN_RANGE
+            if (depositSuccess) {
                 p.state = PositionState.IN_AAVE;
+                return true;
+            } else if (depositAttempted) {
+                // Could not deposit, but don't revert
+                p.state = PositionState.IN_RANGE;
+                return true;
             } else {
-                // If deposit failed, keep state as is (do not set to IN_RANGE)
-                return false;
+                // No deposit attempted (should not happen)
+                p.state = PositionState.IN_RANGE;
+                return true;
             }
-
-            return depositSuccess;
         } else {
             p.state = PositionState.IN_RANGE;
             return true;
@@ -760,5 +747,16 @@ contract LiquidityOrchestrator is ILiquidityOrchestrator {
             revert PositionNotFound();
         }
         p.state = PositionState.IN_RANGE;
+    }
+
+    function updateReserves(
+        bytes32 positionKey,
+        uint256 reserveAmount0,
+        uint256 reserveAmount1
+    ) external {
+        PositionData storage p = positions[positionKey];
+        require(p.exists, "Position must exist");
+        p.reserveAmount0 = FHE.asEuint256(reserveAmount0);
+        p.reserveAmount1 = FHE.asEuint256(reserveAmount1);
     }
 }

@@ -35,7 +35,10 @@ interface ILiquidityOrchestrator {
     event DepositFailed(bytes32 positionKey, string reason);
     event WithdrawalFailed(bytes32 positionKey, string reason);
     event PreparePositionForWithdrawed(bytes32 positionKey, uint256 amount);
-    event PreparePositionForWithdrawalFailed(bytes32 positionKey, string reason);
+    event PreparePositionForWithdrawalFailed(
+        bytes32 positionKey,
+        string reason
+    );
     event PostWithdrawalLiquidityDeposited(bytes32 positionKey, uint256 amount);
     event PostAddLiquidityDeposited(bytes32 positionKey, uint256 amount);
 
@@ -53,9 +56,10 @@ interface ILiquidityOrchestrator {
      * @param currentTick Current tick before swap
      * @return needsWithdrawal True if position is currently active but liquidity is in Aave
      */
-    function checkPreSwapLiquidityNeeds(bytes32 positionKey, int24 currentTick)
-        external
-        returns (bool needsWithdrawal);
+    function checkPreSwapLiquidityNeeds(
+        bytes32 positionKey,
+        int24 currentTick
+    ) external returns (bool needsWithdrawal);
 
     /**
      * @notice Check if position needs liquidity deposit AFTER swap (tick leaving range)
@@ -64,9 +68,11 @@ interface ILiquidityOrchestrator {
      * @param newTick Tick after swap
      * @return needsDeposit True if position became inactive and should go to Aave
      */
-    function checkPostSwapLiquidityNeeds(bytes32 positionKey, int24 oldTick, int24 newTick)
-        external
-        returns (bool needsDeposit);
+    function checkPostSwapLiquidityNeeds(
+        bytes32 positionKey,
+        int24 oldTick,
+        int24 newTick
+    ) external returns (bool needsDeposit);
 
     /**
      * @notice Get available liquidity for a position (Uniswap + Aave)
@@ -75,7 +81,9 @@ interface ILiquidityOrchestrator {
      * @return amount1 Total amount of token1 available
      * @return state Current position state
      */
-    function getAvailableLiquidity(bytes32 positionKey)
+    function getAvailableLiquidity(
+        bytes32 positionKey
+    )
         external
         view
         returns (uint256 amount0, uint256 amount1, PositionState state);
@@ -85,14 +93,18 @@ interface ILiquidityOrchestrator {
      * @param positionKey The position identifier
      * @return PositionData struct containing all position information
      */
-    function getPosition(bytes32 positionKey) external view returns (PositionData memory);
+    function getPosition(
+        bytes32 positionKey
+    ) external view returns (PositionData memory);
 
     /**
      * @notice Check if position exists
      * @param positionKey The position identifier
      * @return exists True if position exists
      */
-    function isPositionExists(bytes32 positionKey) external view returns (bool exists);
+    function isPositionExists(
+        bytes32 positionKey
+    ) external view returns (bool exists);
 
     // State-Changing Functions
 
@@ -105,9 +117,12 @@ interface ILiquidityOrchestrator {
      * @param asset1 Address of token1
      * @return success True if preparation successful
      */
-    function preparePreSwapLiquidity(bytes32 positionKey, int24 currentTick, address asset0, address asset1)
-        external
-        returns (bool success);
+    function preparePreSwapLiquidity(
+        bytes32 positionKey,
+        int24 currentTick,
+        address asset0,
+        address asset1
+    ) external returns (bool success);
 
     /**
      * @notice Execute post-swap liquidity management (deposit to Aave if position went out of range)
@@ -135,9 +150,11 @@ interface ILiquidityOrchestrator {
      * @param asset1 Address of token1
      * @return success True if preparation was successful
      */
-    function preparePositionForWithdrawal(bytes32 positionKey, address asset0, address asset1)
-        external
-        returns (bool success);
+    function preparePositionForWithdrawal(
+        bytes32 positionKey,
+        address asset0,
+        address asset1
+    ) external returns (bool success);
 
     /**
      * @notice Handle post-withdrawal rebalance (called after user withdraws liquidity)
@@ -184,7 +201,10 @@ interface ILiquidityOrchestrator {
      * @param positionKey The position identifier
      * @param data Position data to store
      */
-    function upsertPosition(bytes32 positionKey, PositionData calldata data) external;
+    function upsertPosition(
+        bytes32 positionKey,
+        PositionData calldata data
+    ) external;
 
     /**
      * @notice Pause a position (owner only)
@@ -197,4 +217,10 @@ interface ILiquidityOrchestrator {
      * @param positionKey The position identifier
      */
     function resumePosition(bytes32 positionKey) external;
+
+    function updateReserves(
+        bytes32 positionKey,
+        uint256 reserveAmount0,
+        uint256 reserveAmount1
+    ) external;
 }
