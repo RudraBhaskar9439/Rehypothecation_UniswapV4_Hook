@@ -1,8 +1,8 @@
-# Rehypothecation Hook 🔄💧
+# FlexiPool Hook 🔄💧
 
 ## Overview
 
-The Rehypothecation Hook is a Uniswap v4 hook that **automatically optimizes idle LP capital**.  
+The FlexiPool Hook is a Uniswap v4 hook that **automatically optimizes idle LP capital**.  
 When an LP’s position is **out-of-range**, the hook deposits liquidity into Aave to earn lending yield.  
 When the position becomes **in-range again**, the hook withdraws from Aave and makes liquidity available for swaps.
 
