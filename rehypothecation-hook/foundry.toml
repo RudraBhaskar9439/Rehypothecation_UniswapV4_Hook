@@ -20,8 +20,3 @@ optimizer_runs = 800
 via_ir = false
 ffi = true
 
-[rpc_endpoints]
-sepolia = "${SEPOLIA_RPC_URL}"
-
-[etherscan]
-sepolia = { key = "${ETHERSCAN_API_KEY}" }
